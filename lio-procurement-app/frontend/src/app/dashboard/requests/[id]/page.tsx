@@ -6,7 +6,7 @@ import Link from 'next/link';
 import * as api from '@/lib/api';
 import { Button, Input, Alert } from '@/components/base';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
-import type { ProcurementRequestWithDetails } from '@/types/database';
+import type { OrderLine, ProcurementRequestWithDetails } from '@/types/database';
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'bg-green-100 text-green-800',
@@ -151,6 +151,9 @@ export default function RequestDetailPage() {
           unit: l.unit,
           discountPercent: l.discount_percent,
           totalPrice: l.total_price,
+          // Keep catalog links; the server keeps their original agreement snapshot.
+          catalogArticleId: l.catalog_article_id,
+          originalUnitPrice: l.original_unit_price,
         })),
       });
       setEditing(false);
@@ -278,17 +281,26 @@ export default function RequestDetailPage() {
 
           <div className="lio-card p-6">
             <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Order Lines</h2>
+            {request.potential_saving_total ? (
+              <Alert variant="warning" className="mb-4">
+                Catalog agreements were not used where they would have saved{' '}
+                {usd(request.potential_saving_total)} in total.
+              </Alert>
+            ) : null}
             <div className="space-y-2">
               {request.order_lines?.map((line, i) => (
-                <div key={line.id} className="flex justify-between items-start bg-ink-800/[0.02] rounded-lg p-3">
-                  <div>
-                    <p className="text-sm font-medium text-ink">{i + 1}. {line.position_description}</p>
-                    <p className="text-sm text-ink/55 mt-0.5">
-                      {line.amount} {line.unit} × {usd(line.unit_price)}
-                      {line.discount_percent > 0 && ` − ${line.discount_percent}%`}
-                    </p>
+                <div key={line.id} className="bg-ink-800/[0.02] rounded-lg p-3">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-ink">{i + 1}. {line.position_description}</p>
+                      <p className="text-sm text-ink/55 mt-0.5">
+                        {line.amount} {line.unit} × {usd(line.unit_price)}
+                        {line.discount_percent > 0 && ` − ${line.discount_percent}%`}
+                      </p>
+                    </div>
+                    <p className="text-sm font-semibold text-ink">{usd(line.total_price)}</p>
                   </div>
-                  <p className="text-sm font-semibold text-ink">{usd(line.total_price)}</p>
+                  <CatalogLineNote line={line} vendorName={request.vendor_name} />
                 </div>
               ))}
             </div>
@@ -390,6 +402,45 @@ export default function RequestDetailPage() {
 }
 
 const optionalUsd = (n: number | null) => (n === null ? '—' : usd(n));
+
+// Buyer view of a line's catalog status (spec 002, US4): agreement used, or a
+// cheaper agreement that wasn't.
+function CatalogLineNote({ line, vendorName }: { line: OrderLine; vendorName: string }) {
+  if (line.article_number) {
+    const deviation =
+      line.negotiated_unit_price !== null ? line.unit_price - line.negotiated_unit_price : 0;
+    const otherSupplier =
+      line.article_supplier_name &&
+      line.article_supplier_name.trim().toLowerCase() !== vendorName.trim().toLowerCase();
+    return (
+      <div className="mt-2 text-xs">
+        <p className="text-green-800">
+          ✓ Uses catalog agreement {line.article_number} · {line.article_supplier_name} ·
+          negotiated {optionalUsd(line.negotiated_unit_price)}
+        </p>
+        {Math.abs(deviation) >= 0.01 && (
+          <p className="text-amber-800">
+            Price deviates from the agreement by {deviation > 0 ? '+' : '−'}
+            {usd(Math.abs(deviation))} per unit.
+          </p>
+        )}
+        {otherSupplier && (
+          <p className="text-amber-800">Supplier differs from the request&apos;s vendor.</p>
+        )}
+      </div>
+    );
+  }
+  if (line.alternative_article_number && line.potential_saving) {
+    return (
+      <p className="mt-2 text-xs text-amber-800">
+        Catalog alternative available: {line.alternative_article_number} ·{' '}
+        {line.alternative_supplier_name} at {optionalUsd(line.alternative_unit_price)} — potential
+        saving {usd(line.potential_saving)}
+      </p>
+    );
+  }
+  return null;
+}
 // Quote dates are calendar dates (YYYY-MM-DD); format without a timezone shift.
 const formatOptionalDate = (d: string | null) =>
   d ? new Date(`${d}T00:00:00`).toLocaleDateString('en-US') : '—';

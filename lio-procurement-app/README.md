@@ -80,14 +80,30 @@ The names an organization appears under on quotes ("buyer aliases") are an
 admin setting under **Organization → Settings**; Acme is seeded with
 `ACME Corp`, `Lio Technologies, Inc.` and `askLio`.
 
+## Catalog suggestions (negotiated prices)
+
+While a request is built, each order line shows matching articles from the
+organization's own catalog with supplier, negotiated price and the saving (or
+extra cost) for the line's quantity; **Use this** applies one (undoable), and
+the line then records the agreement it uses. Matching = embeddings retrieve the
+closest catalog descriptions, then a small model confirms they are the *same
+kind of item* (so "Desk organizer acrylic" is never suggested for an acrylic
+logo); ranking, units, savings and minimum order quantities are plain code in
+`backend/app/services/catalog_matching.py`. The catalog is embedded at startup
+(`python -m app.embed_catalog`, idempotent); without `OPENAI_API_KEY`
+suggestions fall back to exact-word matches. Buyers see unused cheaper
+agreements on the request page and in Approvals; admins see agreement usage on
+the Articles page.
+
 ## Tests
 
 ```bash
 cd backend && python -m pytest      # API + extraction tests (in-memory SQLite, no network)
 cd frontend && npx tsc --noEmit && npm run build
 
-# Live accuracy check on the reference quotes in ../quotes (needs OPENAI_API_KEY):
-cd backend && python scripts/eval_extraction.py --runs 3
+# Live accuracy checks (need OPENAI_API_KEY):
+cd backend && python scripts/eval_extraction.py --runs 3    # reference quotes in ../quotes
+cd backend && python scripts/eval_suggestions.py --runs 3   # catalog suggestion scenarios
 ```
 
 ## Layout

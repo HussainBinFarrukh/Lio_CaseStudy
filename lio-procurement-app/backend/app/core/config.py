@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     openai_timeout_seconds: float = 45
     openai_max_retries: int = 2
 
+    # Catalog suggestions (spec 002): embeddings retrieve candidates, a small
+    # model confirms they are the same kind of item. 256 dimensions keep the
+    # in-memory scan fast without measurable loss on the reference set.
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 256
+    suggestion_model: str = "gpt-4o-mini"
+    # Suggestions must never hold up the form: short timeout, one retry, then
+    # fall back to exact-token matching.
+    suggestion_timeout_seconds: float = 8
+
     # CORS — NoDecode lets us accept a plain comma-separated string instead of
     # the JSON list pydantic-settings would otherwise demand from env vars.
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]

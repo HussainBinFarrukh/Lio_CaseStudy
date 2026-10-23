@@ -1,20 +1,53 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import * as api from '@/lib/api';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
 import { Button, Input, Alert, Loader } from '@/components/base';
+import { CatalogSuggestions } from '@/components/CatalogSuggestions';
 import { cn, formatCurrency } from '@/lib/utils';
 
-interface OrderLine {
+// A catalog agreement applied to a line (spec 002). The server re-reads the
+// negotiated price from the catalog on submit; this copy is for display.
+interface LinkedArticle {
+  articleId: string;
+  articleNumber: string;
+  supplierId: string;
+  supplierName: string;
+  supplierVatId: string | null;
+  negotiatedPrice: number;
+  minQuantity: number;
+}
+
+interface LineValues {
   positionDescription: string;
   unitPrice: number;
   amount: number;
   unit: string;
   discountPercent: number;
   totalPrice: number;
+}
+
+interface OrderLine extends LineValues {
+  // Stable client id so suggestions and dismissals follow the line through edits.
+  uid: string;
+  catalog?: LinkedArticle;
+  // Values before the catalog article was applied (for undo and realised savings).
+  previous?: LineValues;
+}
+
+let lineCounter = 0;
+const newUid = () => `line-${++lineCounter}`;
+
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
 }
 
 // Document-level amounts that are not order lines (from the quote's totals block).
@@ -33,6 +66,11 @@ const looksLikePdf = (file: File) =>
   PDF_TYPES.includes(file.type) || file.name.toLowerCase().endsWith('.pdf');
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+// Price actually paid per unit (after discount) — what a catalog price is compared with.
+const netUnitPrice = (line: LineValues) =>
+  line.amount > 0 && line.totalPrice > 0 ? round2(line.totalPrice / line.amount) : line.unitPrice;
+const dismissKey = (line: OrderLine) =>
+  `${line.uid}|${line.positionDescription.trim().toLowerCase()}`;
 const lineTotal = (line: Pick<OrderLine, 'amount' | 'unitPrice' | 'discountPercent'>) =>
   round2(line.amount * line.unitPrice * (1 - (line.discountPercent || 0) / 100));
 const grandTotal = (lines: OrderLine[], extras: Extras) =>
@@ -90,6 +128,45 @@ export default function NewRequestPage() {
   const [notes, setNotes] = useState<string[]>([]);
   const [findings, setFindings] = useState<api.ReconciliationFinding[]>([]);
   const [extracting, setExtracting] = useState(false);
+  // Dismissed suggestions per line and description (a new description resets them).
+  const [dismissed, setDismissed] = useState<Record<string, string[]>>({});
+
+  // Catalog suggestions for lines that don't use an agreement yet. Debounced so
+  // typing doesn't trigger a lookup per keystroke; cached per input by TanStack
+  // Query; failures simply show no suggestions (spec 002, FR-008/FR-027).
+  const suggestionInput = useMemo(
+    () => ({
+      vendorName: vendorName || undefined,
+      vendorVatId: vatId || undefined,
+      lines: orderLines
+        .filter((line) => !line.catalog && line.positionDescription.trim())
+        .map((line) => ({
+          key: line.uid,
+          description: line.positionDescription.trim(),
+          unit: line.unit,
+          quantity: line.amount,
+          unitPrice: line.unitPrice,
+          discountPercent: line.discountPercent,
+          totalPrice: line.totalPrice,
+          currency,
+        })),
+    }),
+    [orderLines, vendorName, vatId, currency]
+  );
+  const debouncedInput = useDebounced(suggestionInput, 500);
+  const suggestionsQuery = useQuery({
+    queryKey: ['catalog-suggestions', debouncedInput],
+    queryFn: () => api.catalog.suggest(debouncedInput),
+    enabled: debouncedInput.lines.length > 0,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const suggestionsByLine = useMemo(() => {
+    const map: Record<string, api.LineSuggestions> = {};
+    for (const line of suggestionsQuery.data?.lines || []) map[line.key] = line;
+    return map;
+  }, [suggestionsQuery.data]);
+  const contractedSupplier = suggestionsQuery.data?.contractedSupplier ?? null;
 
   // PDF parsing mutation
   const parsePDFMutation = useMutation({
@@ -106,8 +183,13 @@ export default function NewRequestPage() {
 
   const applyExtraction = (extracted: api.ExtractedVendorData) => {
     const lines: OrderLine[] = (extracted.orderLines || []).map((line) => ({
-      ...line,
+      positionDescription: line.positionDescription,
+      unitPrice: line.unitPrice,
+      amount: line.amount,
+      unit: line.unit,
       discountPercent: line.discountPercent || 0,
+      totalPrice: line.totalPrice,
+      uid: newUid(),
     }));
     const totals = extracted.totals;
     setTitle(extracted.title || '');
@@ -193,6 +275,7 @@ export default function NewRequestPage() {
     applyLines([
       ...orderLines,
       {
+        uid: newUid(),
         positionDescription: '',
         unitPrice: 0,
         amount: 1,
@@ -201,6 +284,63 @@ export default function NewRequestPage() {
         totalPrice: 0,
       },
     ]);
+  };
+
+  // Apply a catalog agreement: catalog description, negotiated price and unit;
+  // the quantity is kept (spec 002, FR-011).
+  const applySuggestion = (index: number, suggestion: api.ArticleSuggestion) => {
+    const line = orderLines[index];
+    const previous: LineValues = {
+      positionDescription: line.positionDescription,
+      unitPrice: line.unitPrice,
+      amount: line.amount,
+      unit: line.unit,
+      discountPercent: line.discountPercent,
+      totalPrice: line.totalPrice,
+    };
+    const applied: OrderLine = {
+      uid: line.uid,
+      positionDescription: suggestion.description,
+      unitPrice: suggestion.unitPrice,
+      amount: line.amount,
+      unit: suggestion.unit,
+      discountPercent: 0,
+      totalPrice: lineTotal({ amount: line.amount, unitPrice: suggestion.unitPrice, discountPercent: 0 }),
+      catalog: {
+        articleId: suggestion.articleId,
+        articleNumber: suggestion.articleNumber,
+        supplierId: suggestion.supplierId,
+        supplierName: suggestion.supplierName,
+        supplierVatId: suggestion.supplierVatId,
+        negotiatedPrice: suggestion.unitPrice,
+        minQuantity: suggestion.minQuantity,
+      },
+      previous,
+    };
+    const updated = [...orderLines];
+    updated[index] = applied;
+    applyLines(updated);
+  };
+
+  const undoSuggestion = (index: number) => {
+    const line = orderLines[index];
+    if (!line.previous) return;
+    const updated = [...orderLines];
+    updated[index] = { uid: line.uid, ...line.previous };
+    applyLines(updated);
+  };
+
+  const dismissSuggestion = (line: OrderLine, suggestion: api.ArticleSuggestion) => {
+    const key = dismissKey(line);
+    setDismissed((current) => ({
+      ...current,
+      [key]: [...(current[key] || []), suggestion.articleId],
+    }));
+  };
+
+  const switchVendor = (article: LinkedArticle) => {
+    setVendorName(article.supplierName);
+    setVatId(article.supplierVatId || '');
   };
 
   // Update order line
@@ -262,7 +402,16 @@ export default function NewRequestPage() {
         commodityGroupId: commodityGroupId,
         totalCost,
         department,
-        orderLines,
+        orderLines: orderLines.map((line) => ({
+          positionDescription: line.positionDescription,
+          unitPrice: line.unitPrice,
+          amount: line.amount,
+          unit: line.unit,
+          discountPercent: line.discountPercent,
+          totalPrice: line.totalPrice,
+          catalogArticleId: line.catalog?.articleId ?? null,
+          originalUnitPrice: line.catalog && line.previous ? netUnitPrice(line.previous) : null,
+        })),
         quoteNumber: quoteNumber || null,
         quoteDate: quoteDate || null,
         validUntil: validUntil || null,
@@ -430,6 +579,11 @@ export default function NewRequestPage() {
               onChange={(e) => setVendorName(e.target.value)}
               required
               placeholder="Adobe Systems"
+              helperText={
+                contractedSupplier
+                  ? `✓ Contracted supplier (${contractedSupplier.name}) — quoted prices are checked against your agreements`
+                  : undefined
+              }
             />
 
             <Input
@@ -486,7 +640,12 @@ export default function NewRequestPage() {
         {/* Order Lines */}
         <div className="lio-card p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight text-ink">Order Lines *</h2>
+            <h2 className="text-xl font-semibold tracking-tight text-ink">
+              Order Lines *
+              {suggestionsQuery.isFetching && (
+                <span className="ml-3 text-sm font-normal text-ink/45">Checking the catalog…</span>
+              )}
+            </h2>
             <Button type="button" onClick={addOrderLine} variant="outline" size="sm">
               + Add Line
             </Button>
@@ -500,9 +659,14 @@ export default function NewRequestPage() {
             <div className="space-y-4">
               {orderLines.map((line, index) => {
                 const finding = lineFinding(index);
+                const lineSuggestions = suggestionsByLine[line.uid];
+                const hidden = dismissed[dismissKey(line)] || [];
+                const visibleSuggestions = (lineSuggestions?.suggestions || []).filter(
+                  (s) => !hidden.includes(s.articleId)
+                );
                 return (
                   <div
-                    key={index}
+                    key={line.uid}
                     className={cn(
                       'border rounded-lg p-4',
                       finding ? 'border-amber-300 bg-amber-50/40' : 'border-gray-200'
@@ -589,6 +753,33 @@ export default function NewRequestPage() {
                         </span>
                       </div>
                     </div>
+
+                    {line.catalog ? (
+                      <LinkedArticleNotes
+                        line={line}
+                        vendorName={vendorName}
+                        vendorIsSupplier={contractedSupplier?.id === line.catalog.supplierId}
+                        onUndo={() => undoSuggestion(index)}
+                        onSwitchVendor={() => line.catalog && switchVendor(line.catalog)}
+                        money={money}
+                      />
+                    ) : (
+                      <>
+                        {lineSuggestions?.agreementCheck && (
+                          <p className="mt-2 text-sm text-amber-800">
+                            Quoted {money(lineSuggestions.agreementCheck.difference)} per unit above
+                            your agreed price with this supplier (
+                            {lineSuggestions.agreementCheck.articleNumber},{' '}
+                            {money(lineSuggestions.agreementCheck.negotiatedPrice)}).
+                          </p>
+                        )}
+                        <CatalogSuggestions
+                          suggestions={visibleSuggestions}
+                          onApply={(s) => applySuggestion(index, s)}
+                          onDismiss={(s) => dismissSuggestion(line, s)}
+                        />
+                      </>
+                    )}
                   </div>
                 );
               })}
@@ -659,6 +850,73 @@ export default function NewRequestPage() {
           </Button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// What a line that uses a catalog agreement shows: the agreement, undo, and any
+// deviation from it (price, minimum quantity, supplier ≠ request vendor).
+function LinkedArticleNotes({
+  line,
+  vendorName,
+  vendorIsSupplier,
+  onUndo,
+  onSwitchVendor,
+  money,
+}: {
+  line: OrderLine;
+  vendorName: string;
+  vendorIsSupplier: boolean;
+  onUndo: () => void;
+  onSwitchVendor: () => void;
+  money: (n: number) => string;
+}) {
+  const article = line.catalog;
+  if (!article) return null;
+  const deviation = round2(line.unitPrice - article.negotiatedPrice);
+  return (
+    <div className="mt-3 rounded-lg border border-green-200 bg-green-50/60 p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-green-800">
+          ✓ Catalog agreement <span className="font-mono text-xs">{article.articleNumber}</span> ·{' '}
+          {article.supplierName} · negotiated {money(article.negotiatedPrice)} / {line.unit}
+        </p>
+        {line.previous && (
+          <button
+            type="button"
+            onClick={onUndo}
+            className="rounded-full px-3 py-1 text-xs text-ink/70 hover:bg-ink-800/[0.06]"
+          >
+            Undo
+          </button>
+        )}
+      </div>
+      {deviation !== 0 && (
+        <p className="mt-1 text-amber-800">
+          Unit price deviates from the agreement by {deviation > 0 ? '+' : '−'}
+          {money(Math.abs(deviation))}.
+        </p>
+      )}
+      {line.amount < article.minQuantity && (
+        <p className="mt-1 text-amber-800">
+          Below the minimum order quantity ({article.minQuantity}).
+        </p>
+      )}
+      {!vendorIsSupplier && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-amber-800">
+          <span>
+            This article is from {article.supplierName}, not{' '}
+            {vendorName ? vendorName : 'the request’s vendor'}. A request has one supplier.
+          </span>
+          <button
+            type="button"
+            onClick={onSwitchVendor}
+            className="rounded-full bg-ink px-3 py-1 text-xs font-medium text-white hover:bg-ink-700"
+          >
+            Switch vendor to {article.supplierName}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

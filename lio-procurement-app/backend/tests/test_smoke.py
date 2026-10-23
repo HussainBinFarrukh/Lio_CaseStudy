@@ -969,6 +969,150 @@ def test_request_keeps_quote_details_and_discounts():
     assert client.post("/requests", json=bad, headers=_auth(token)).status_code == 422
 
 
+def _signin(email: str) -> str:
+    r = client.post("/auth/signin", json={"email": email, "password": "demo1234"})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+def test_catalog_suggestions_api_and_tenant_isolation():
+    toner = {"key": "0", "description": "Toner cartridge cyan", "unit": "pieces", "quantity": 5}
+    r = client.post(
+        "/catalog/suggestions", json={"lines": [toner]}, headers=_auth(_signin("requester@acme.com"))
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # No AI key in tests: exact-token fallback, still from Acme's catalog only.
+    assert body["source"] == "lexical"
+    assert [s["articleNumber"] for s in body["lines"][0]["suggestions"]] == [
+        "MON-00922", "BEA-01877", "DEL-00890",
+    ]
+
+    # Another tenant (empty catalog) never sees Acme's articles (SC-007).
+    r = client.post(
+        "/catalog/suggestions", json={"lines": [toner]}, headers=_auth(_signin("admin@walmart.com"))
+    )
+    assert r.json()["lines"][0]["suggestions"] == []
+
+    loner = client.post(
+        "/auth/signup", json={"email": "catalog-loner@example.com", "password": "secret123"}
+    ).json()["access_token"]
+    assert client.post(
+        "/catalog/suggestions", json={"lines": [toner]}, headers=_auth(loner)
+    ).status_code == 403
+
+
+def test_request_catalog_links_snapshot_and_alternatives():
+    from app.models import Article, Organization, Supplier
+
+    with TestingSession() as db:
+        mon = db.scalar(select(Article).where(Article.article_number == "MON-00922"))
+        mon_id = str(mon.id)
+        walmart = db.scalar(select(Organization).where(Organization.slug == "walmart"))
+        foreign_supplier = Supplier(organization_id=walmart.id, name="Walmart Vendor")
+        db.add(foreign_supplier)
+        db.flush()
+        foreign = Article(
+            organization_id=walmart.id, article_number="WAL-1", supplier_id=foreign_supplier.id,
+            description="Toner cartridge cyan", unit_price=1, unit="piece", quantity=1,
+        )
+        db.add(foreign)
+        db.commit()
+        foreign_id = str(foreign.id)
+
+    token = _signin("requester@acme.com")
+    linked = {
+        "positionDescription": "Toner cartridge cyan", "unitPrice": 95.0, "amount": 10,
+        "unit": "piece", "totalPrice": 950.0, "catalogArticleId": mon_id,
+        "originalUnitPrice": 120.0,
+    }
+    unlinked = {
+        "positionDescription": "Toner cartridge cyan", "unitPrice": 150.0, "amount": 5,
+        "unit": "pieces", "totalPrice": 750.0,
+    }
+    payload = {
+        "requestorName": "R", "titleShortDescription": "Toner", "vendorName": "Montclair Supply Corp.",
+        "vatId": "", "commodityGroupId": 15, "totalCost": 1700.0, "department": "",
+        "orderLines": [linked, unlinked],
+    }
+    r = client.post("/requests", json=payload, headers=_auth(token))
+    assert r.status_code == 201, r.text
+    created = r.json()
+    first, second = created["order_lines"]
+    assert (first["article_number"], first["article_supplier_name"]) == (
+        "MON-00922", "Montclair Supply Corp."
+    )
+    assert (first["negotiated_unit_price"], first["original_unit_price"]) == (95.0, 120.0)
+    assert first["potential_saving"] is None
+    # Unlinked line: the cheaper agreement it ignored, for the buyer (FR-019).
+    assert (second["alternative_article_number"], second["potential_saving"]) == (
+        "MON-00922", 275.0
+    )
+    assert created["potential_saving_total"] == 275.0
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(token)).json()
+    assert any("1 of 2 lines use catalog agreements" in a["summary"] for a in activity)
+
+    # A later catalog price change doesn't rewrite the submitted agreement.
+    with TestingSession() as db:
+        db.get(Article, mon.id).unit_price = 80
+        db.commit()
+    edit = dict(payload, title="Toner refill")
+    del edit["titleShortDescription"]
+    r = client.put(f"/requests/{created['id']}", json=edit, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["order_lines"][0]["negotiated_unit_price"] == 95.0
+    with TestingSession() as db:
+        db.get(Article, mon.id).unit_price = 95
+        db.commit()
+
+    # Another organization's article can't be linked (tenant isolation).
+    bad = dict(payload, orderLines=[dict(linked, catalogArticleId=foreign_id)])
+    r = client.post("/requests", json=bad, headers=_auth(token))
+    assert r.status_code == 422 and r.json()["detail"] == "Unknown catalog article"
+
+
+def test_catalog_usage_report_admin_only():
+    from app.models import Article
+
+    admin = _signin("admin@acme.com")
+    before = client.get("/catalog/usage", headers=_auth(admin)).json()
+    with TestingSession() as db:
+        mon_id = str(db.scalar(select(Article.id).where(Article.article_number == "MON-00922")))
+    lines = [
+        {"positionDescription": "Toner cartridge cyan", "unitPrice": 95.0, "amount": 10,
+         "unit": "piece", "totalPrice": 950.0, "catalogArticleId": mon_id,
+         "originalUnitPrice": 120.0},
+        {"positionDescription": "Toner cartridge cyan", "unitPrice": 150.0, "amount": 5,
+         "unit": "pieces", "totalPrice": 750.0},
+    ]
+    r = client.post(
+        "/requests",
+        json={"requestorName": "A", "titleShortDescription": "Usage", "vendorName": "V",
+              "vatId": "", "commodityGroupId": 15, "totalCost": 1700.0, "department": "",
+              "orderLines": lines},
+        headers=_auth(admin),
+    )
+    assert r.status_code == 201, r.text
+
+    r = client.get("/catalog/usage", headers=_auth(admin))
+    assert r.status_code == 200, r.text
+    usage = r.json()
+    assert usage["lineCount"] - before["lineCount"] == 2
+    assert usage["linkedLineCount"] - before["linkedLineCount"] == 1
+    # (120 - 95) x 10 realised; (150 - 95) x 5 missed.
+    assert round(usage["realisedSavings"] - before["realisedSavings"], 2) == 250.0
+    assert round(usage["missedSavings"] - before["missedSavings"], 2) == 275.0
+    assert 0 < usage["linkedShare"] <= 1
+
+    assert client.get("/catalog/usage", headers=_auth(_signin("buyer@acme.com"))).status_code == 403
+    walmart = client.get("/catalog/usage", headers=_auth(_signin("admin@walmart.com"))).json()
+    assert walmart["lineCount"] == 0
+    r = client.get(
+        "/catalog/usage?from=2026-10-10&to=2026-10-01", headers=_auth(_signin("admin@acme.com"))
+    )
+    assert r.status_code == 422
+
+
 if __name__ == "__main__":
     test_full_user_journey()
     test_pdf_parse()

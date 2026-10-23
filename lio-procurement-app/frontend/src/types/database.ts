@@ -70,6 +70,8 @@ export type ProcurementRequest = {
   quote_number: string | null;
   quote_date: string | null;
   quote_valid_until: string | null;
+  /** Saving available from catalog alternatives that were not used. */
+  potential_saving_total: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -84,6 +86,19 @@ export type OrderLine = {
   discount_percent: number;
   /** Net of discount. */
   total_price: number;
+  /** Catalog agreement used (snapshot at linking time). */
+  catalog_article_id: string | null;
+  article_number: string | null;
+  article_description: string | null;
+  article_supplier_name: string | null;
+  negotiated_unit_price: number | null;
+  article_min_quantity: number | null;
+  original_unit_price: number | null;
+  /** Cheapest matching catalog article that was not used. */
+  alternative_article_number: string | null;
+  alternative_supplier_name: string | null;
+  alternative_unit_price: number | null;
+  potential_saving: number | null;
   line_order: number;
   created_at: string;
 };

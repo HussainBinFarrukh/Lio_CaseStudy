@@ -64,6 +64,66 @@ export interface OrderLineInput {
   /** 0–100; the line total is net of it. */
   discountPercent?: number;
   totalPrice: number;
+  /** Catalog agreement applied to the line; the server snapshots its price. */
+  catalogArticleId?: string | null;
+  /** The quoted price before the catalog article was applied. */
+  originalUnitPrice?: number | null;
+}
+
+// Catalog suggestions (negotiated prices) for order lines.
+export interface SuggestionLineInput {
+  key: string;
+  description: string;
+  unit: string;
+  quantity: number;
+  unitPrice?: number | null;
+  discountPercent?: number;
+  totalPrice?: number | null;
+  currency?: string;
+}
+
+export interface ArticleSuggestion {
+  articleId: string;
+  articleNumber: string;
+  description: string;
+  supplierId: string;
+  supplierName: string;
+  supplierVatId: string | null;
+  unitPrice: number;
+  unit: string;
+  currency: string;
+  minQuantity: number;
+  relevance: number;
+  /** Units and currency comparable with the line. */
+  comparable: boolean;
+  unitDifference: number | null;
+  /** Negative = saving for the line's quantity, positive = more expensive. */
+  lineEffect: number | null;
+  belowMinQuantity: boolean;
+  fromVendor: boolean;
+}
+
+export interface LineSuggestions {
+  key: string;
+  suggestions: ArticleSuggestion[];
+  agreementCheck: { articleNumber: string; negotiatedPrice: number; difference: number } | null;
+}
+
+export interface SuggestionsResponse {
+  source: 'semantic' | 'lexical';
+  contractedSupplier: { id: string; name: string } | null;
+  lines: LineSuggestions[];
+}
+
+export interface CatalogUsage {
+  from: string;
+  to: string;
+  requestCount: number;
+  lineCount: number;
+  linkedLineCount: number;
+  linkedShare: number;
+  realisedSavings: number;
+  missedSavings: number;
 }
 
 /** Vendor-quote details captured at extraction (all optional). */
@@ -393,5 +453,28 @@ export const pdf = {
 export const extraction = {
   extract(text: string): Promise<ExtractionResponse> {
     return apiFetch('/extraction', { body: { text } });
+  },
+};
+
+// ============================================================================
+// Catalog (negotiated-price suggestions, agreement usage)
+// ============================================================================
+
+export const catalog = {
+  suggest(input: {
+    lines: SuggestionLineInput[];
+    vendorName?: string;
+    vendorVatId?: string;
+    limit?: number;
+  }): Promise<SuggestionsResponse> {
+    return apiFetch('/catalog/suggestions', { body: input });
+  },
+
+  usage(params?: { from?: string; to?: string }): Promise<CatalogUsage> {
+    const qs = new URLSearchParams();
+    if (params?.from) qs.set('from', params.from);
+    if (params?.to) qs.set('to', params.to);
+    const query = qs.toString();
+    return apiFetch(`/catalog/usage${query ? `?${query}` : ''}`);
   },
 };

@@ -13,7 +13,8 @@ RUN pip install --upgrade pip && pip install .
 # Copy application code
 COPY . .
 
-# Apply schema migrations, seed reference data (both idempotent), then serve
-CMD ["sh", "-c", "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 7200"]
+# Apply schema migrations, seed reference data, embed the catalog (all
+# idempotent; embedding is best effort), then serve
+CMD ["sh", "-c", "alembic upgrade head && python -m app.seed && (python -m app.embed_catalog || true) && uvicorn app.main:app --host 0.0.0.0 --port 7200"]
 
 EXPOSE 7200

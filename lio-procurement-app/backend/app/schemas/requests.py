@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 RequestStatus = Literal["open", "in_progress", "closed"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
@@ -20,6 +20,11 @@ class OrderLineIn(BaseModel):
     discount_percent: float = Field(default=0, ge=0, lt=100, alias="discountPercent")
     # Net of discount.
     total_price: float = Field(alias="totalPrice")
+    # Catalog agreement applied to this line (spec 002). The server copies the
+    # article's number, supplier and negotiated price from the catalog itself.
+    catalog_article_id: uuid.UUID | None = Field(default=None, alias="catalogArticleId")
+    # The quoted price before the article was applied (realised-savings basis).
+    original_unit_price: float | None = Field(default=None, ge=0, alias="originalUnitPrice")
 
 
 class QuoteDetailsIn(BaseModel):
@@ -104,6 +109,19 @@ class OrderLineOut(BaseModel):
     total_price: float
     line_order: int
     created_at: datetime
+    # Catalog agreement used (snapshot at linking time).
+    catalog_article_id: uuid.UUID | None = None
+    article_number: str | None = None
+    article_description: str | None = None
+    article_supplier_name: str | None = None
+    negotiated_unit_price: float | None = None
+    article_min_quantity: float | None = None
+    original_unit_price: float | None = None
+    # Cheapest matching catalog article that was not used.
+    alternative_article_number: str | None = None
+    alternative_supplier_name: str | None = None
+    alternative_unit_price: float | None = None
+    potential_saving: float | None = None
 
 
 class RequestActivityOut(BaseModel):
@@ -152,3 +170,10 @@ class RequestOut(BaseModel):
     commodity_groups: CommodityGroupOut | None = Field(
         default=None, validation_alias="commodity_group"
     )
+
+    @computed_field
+    @property
+    def potential_saving_total(self) -> float | None:
+        """Total saving available from catalog alternatives that were not used."""
+        savings = [line.potential_saving for line in self.order_lines if line.potential_saving]
+        return round(sum(savings), 2) if savings else None

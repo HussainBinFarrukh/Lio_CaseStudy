@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.routers import (
     articles,
     auth,
+    catalog,
     commodity_groups,
     extraction,
     organizations,
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(commodity_groups.router)
     app.include_router(suppliers.router)
     app.include_router(articles.router)
+    app.include_router(catalog.router)
     app.include_router(pdf.router)
     app.include_router(extraction.router)
 

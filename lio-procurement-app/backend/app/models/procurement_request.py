@@ -112,6 +112,26 @@ class OrderLine(Base, CreatedAtMixin):
     total_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     line_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # Catalog agreement this line uses (migration 0008). The snapshot is copied
+    # from the organization's catalog by the server when the link is made and
+    # kept even if the article later changes or is deleted.
+    catalog_article_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    article_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    article_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    article_supplier_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    negotiated_unit_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    article_min_quantity: Mapped[float | None] = mapped_column(Numeric(12, 3), nullable=True)
+    # The quoted price before the article was applied (basis for realised savings).
+    original_unit_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+
+    # Cheapest matching catalog article that was NOT used (for buyers / reporting).
+    alternative_article_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alternative_supplier_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alternative_unit_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    potential_saving: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+
     request: Mapped["ProcurementRequest"] = relationship(back_populates="order_lines")
 
 

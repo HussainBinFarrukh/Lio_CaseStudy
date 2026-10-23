@@ -6,7 +6,7 @@ import Link from 'next/link';
 import * as api from '@/lib/api';
 import { Button, Input, Alert } from '@/components/base';
 import { useCommodityGroups } from '@/lib/hooks/useCommodityGroups';
-import type { ProcurementRequestWithDetails } from '@/types/database';
+import type { OrderLine, ProcurementRequestWithDetails } from '@/types/database';
 
 const STATUS_BADGE: Record<string, string> = {
   open: 'bg-green-100 text-green-800',
@@ -36,6 +36,7 @@ export default function RequestDetailPage() {
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
 
   // Edit form state
   const [form, setForm] = useState({
@@ -142,6 +143,7 @@ export default function RequestDetailPage() {
         vendorName: form.vendorName,
         vatId: form.vatId,
         commodityGroupId: form.commodityGroupId || 0,
+        overrideReason: needsOverrideReason ? overrideReason.trim() : null,
         totalCost: form.totalCost,
         department: form.department,
         orderLines: (request.order_lines || []).map((l) => ({
@@ -149,7 +151,11 @@ export default function RequestDetailPage() {
           unitPrice: l.unit_price,
           amount: l.amount,
           unit: l.unit,
+          discountPercent: l.discount_percent,
           totalPrice: l.total_price,
+          // Keep catalog links; the server keeps their original agreement snapshot.
+          catalogArticleId: l.catalog_article_id,
+          originalUnitPrice: l.original_unit_price,
         })),
       });
       setEditing(false);
@@ -183,6 +189,13 @@ export default function RequestDetailPage() {
   }
 
   const canApprove = (role === 'buyer' || role === 'admin') && request.approval_status === 'pending';
+  // Booking rules (spec 003): requesters can't move a rule-booked request; buyers
+  // and admins can, with a reason.
+  const isPrivileged = role === 'buyer' || role === 'admin';
+  const ruleBooked = request.commodity_source === 'rule' && !!request.booking_rule_name;
+  const ruleLocked = ruleBooked && !isPrivileged;
+  const needsOverrideReason =
+    ruleBooked && isPrivileged && form.commodityGroupId !== request.commodity_group_id;
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -257,20 +270,47 @@ export default function RequestDetailPage() {
               />
               <Field label="Total Cost" value={usd(request.total_cost)} />
             </dl>
+            <CommoditySourceNote request={request} />
           </div>
+
+          {hasQuoteDetails(request) && (
+            <div className="lio-card p-6">
+              <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Vendor Quote</h2>
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
+                <Field label="Quote Number" value={request.quote_number || '—'} />
+                <Field label="Currency" value={request.currency || '—'} />
+                <Field label="Quote Date" value={formatOptionalDate(request.quote_date)} />
+                <Field label="Valid Until" value={formatOptionalDate(request.quote_valid_until)} />
+                <Field label="Net Total" value={optionalUsd(request.net_total)} />
+                <Field label="Shipping" value={optionalUsd(request.shipping_amount)} />
+                <Field label="Tax" value={optionalUsd(request.tax_amount)} />
+                <Field label="Fees" value={optionalUsd(request.fees_amount)} />
+              </dl>
+            </div>
+          )}
 
           <div className="lio-card p-6">
             <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Order Lines</h2>
+            {request.potential_saving_total ? (
+              <Alert variant="warning" className="mb-4">
+                Catalog agreements were not used where they would have saved{' '}
+                {usd(request.potential_saving_total)} in total.
+              </Alert>
+            ) : null}
             <div className="space-y-2">
               {request.order_lines?.map((line, i) => (
-                <div key={line.id} className="flex justify-between items-start bg-ink-800/[0.02] rounded-lg p-3">
-                  <div>
-                    <p className="text-sm font-medium text-ink">{i + 1}. {line.position_description}</p>
-                    <p className="text-sm text-ink/55 mt-0.5">
-                      {line.amount} {line.unit} × {usd(line.unit_price)}
-                    </p>
+                <div key={line.id} className="bg-ink-800/[0.02] rounded-lg p-3">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-medium text-ink">{i + 1}. {line.position_description}</p>
+                      <p className="text-sm text-ink/55 mt-0.5">
+                        {line.amount} {line.unit} × {usd(line.unit_price)}
+                        {line.discount_percent > 0 && ` − ${line.discount_percent}%`}
+                      </p>
+                    </div>
+                    <p className="text-sm font-semibold text-ink">{usd(line.total_price)}</p>
                   </div>
-                  <p className="text-sm font-semibold text-ink">{usd(line.total_price)}</p>
+                  <CatalogLineNote line={line} vendorName={request.vendor_name} />
                 </div>
               ))}
             </div>
@@ -346,14 +386,28 @@ export default function RequestDetailPage() {
                 <select
                   value={form.commodityGroupId || ''}
                   onChange={(e) => setForm({ ...form, commodityGroupId: Number(e.target.value) })}
-                  className="w-full h-11 px-3.5 border border-line rounded-xl text-sm text-ink bg-white focus:outline-none focus:ring-2 focus:ring-accent-deep/60"
+                  disabled={ruleLocked}
+                  className="w-full h-11 px-3.5 border border-line rounded-xl text-sm text-ink bg-white focus:outline-none focus:ring-2 focus:ring-accent-deep/60 disabled:bg-ink-800/[0.03]"
                 >
                   <option value="">Select a commodity group</option>
                   {commodityGroups?.map((g) => (
                     <option key={g.id} value={g.id}>{g.id} - {g.category} - {g.name}</option>
                   ))}
                 </select>
+                {ruleLocked && (
+                  <p className="mt-1.5 text-xs text-accent-deep">
+                    🔒 Set by booking rule &lsquo;{request.booking_rule_name}&rsquo;. Only a buyer or
+                    admin can book it elsewhere.
+                  </p>
+                )}
               </div>
+              {needsOverrideReason && (
+                <Input
+                  label={`Reason for overriding booking rule '${request.booking_rule_name}' *`}
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                />
+              )}
               <Input label="Total Cost ($) *" type="number" step="0.01" value={form.totalCost}
                 onChange={(e) => setForm({ ...form, totalCost: parseFloat(e.target.value) || 0 })} />
               <p className="text-xs text-ink/45">Order lines are edited from the request creation flow.</p>
@@ -370,6 +424,77 @@ export default function RequestDetailPage() {
     </div>
   );
 }
+
+const optionalUsd = (n: number | null) => (n === null ? '—' : usd(n));
+
+// How the commodity group was decided (spec 003).
+function CommoditySourceNote({ request }: { request: ProcurementRequestWithDetails }) {
+  if (request.commodity_source === 'rule' && request.booking_rule_name) {
+    return (
+      <p className="mt-4 text-xs text-accent-deep">
+        Booked by rule &lsquo;{request.booking_rule_name}&rsquo;
+        {request.booking_rule_line ? ` (line: “${request.booking_rule_line}”)` : ''}.
+      </p>
+    );
+  }
+  if (request.commodity_source === 'override') {
+    return (
+      <p className="mt-4 text-xs text-amber-800">
+        Booking rule &lsquo;{request.booking_rule_name}&rsquo; overridden by a buyer/admin. Reason:{' '}
+        {request.override_reason}
+      </p>
+    );
+  }
+  if (request.commodity_source === 'system') {
+    return <p className="mt-4 text-xs text-ink/45">Commodity group proposed by the system.</p>;
+  }
+  return null;
+}
+
+// Buyer view of a line's catalog status (spec 002, US4): agreement used, or a
+// cheaper agreement that wasn't.
+function CatalogLineNote({ line, vendorName }: { line: OrderLine; vendorName: string }) {
+  if (line.article_number) {
+    const deviation =
+      line.negotiated_unit_price !== null ? line.unit_price - line.negotiated_unit_price : 0;
+    const otherSupplier =
+      line.article_supplier_name &&
+      line.article_supplier_name.trim().toLowerCase() !== vendorName.trim().toLowerCase();
+    return (
+      <div className="mt-2 text-xs">
+        <p className="text-green-800">
+          ✓ Uses catalog agreement {line.article_number} · {line.article_supplier_name} ·
+          negotiated {optionalUsd(line.negotiated_unit_price)}
+        </p>
+        {Math.abs(deviation) >= 0.01 && (
+          <p className="text-amber-800">
+            Price deviates from the agreement by {deviation > 0 ? '+' : '−'}
+            {usd(Math.abs(deviation))} per unit.
+          </p>
+        )}
+        {otherSupplier && (
+          <p className="text-amber-800">Supplier differs from the request&apos;s vendor.</p>
+        )}
+      </div>
+    );
+  }
+  if (line.alternative_article_number && line.potential_saving) {
+    return (
+      <p className="mt-2 text-xs text-amber-800">
+        Catalog alternative available: {line.alternative_article_number} ·{' '}
+        {line.alternative_supplier_name} at {optionalUsd(line.alternative_unit_price)} — potential
+        saving {usd(line.potential_saving)}
+      </p>
+    );
+  }
+  return null;
+}
+// Quote dates are calendar dates (YYYY-MM-DD); format without a timezone shift.
+const formatOptionalDate = (d: string | null) =>
+  d ? new Date(`${d}T00:00:00`).toLocaleDateString('en-US') : '—';
+const hasQuoteDetails = (r: ProcurementRequestWithDetails) =>
+  [r.quote_number, r.quote_date, r.quote_valid_until, r.net_total, r.shipping_amount,
+    r.tax_amount, r.fees_amount].some((v) => v !== null && v !== undefined);
 
 function Field({ label, value }: { label: string; value: string }) {
   return (

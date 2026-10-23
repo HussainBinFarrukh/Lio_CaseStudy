@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react';
 import * as api from '@/lib/api';
 import type { ArticlePage } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
 import { Input, Alert } from '@/components/base';
+import { formatCurrency } from '@/lib/utils';
 
 const PAGE_SIZE = 25;
 
@@ -22,6 +24,74 @@ function formatQuantity(value: string): string {
   if (Number.isNaN(n)) return value;
   // Drop trailing zeros: 1.000 -> "1", 1.500 -> "1.5"
   return String(Number(n.toFixed(3)));
+}
+
+const USAGE_PERIODS = [
+  { days: 30, label: 'Last 30 days' },
+  { days: 90, label: 'Last 90 days' },
+  { days: 365, label: 'Last 12 months' },
+];
+
+const isoDaysAgo = (days: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - days + 1);
+  return d.toISOString().slice(0, 10);
+};
+
+// How often requests use the negotiated catalog prices (spec 002, US6). Admins only.
+function AgreementUsage() {
+  const [days, setDays] = useState(30);
+  const { data: org } = useQuery({
+    queryKey: ['organization', 'me'],
+    queryFn: () => api.organizations.getMine(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const isAdmin = org?.role === 'admin';
+  const { data: usage } = useQuery({
+    queryKey: ['catalog-usage', days],
+    queryFn: () => api.catalog.usage({ from: isoDaysAgo(days) }),
+    enabled: isAdmin,
+  });
+  if (!isAdmin || !usage) return null;
+
+  const stats = [
+    {
+      label: 'Lines using agreements',
+      value: `${usage.linkedLineCount} of ${usage.lineCount} (${Math.round(usage.linkedShare * 100)}%)`,
+    },
+    { label: 'Realised savings', value: formatCurrency(usage.realisedSavings) },
+    { label: 'Missed savings', value: formatCurrency(usage.missedSavings) },
+    { label: 'Requests', value: usage.requestCount.toLocaleString('en-US') },
+  ];
+  return (
+    <div className="lio-card p-6 mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight text-ink">Agreement usage</h2>
+          <p className="text-sm text-ink/55">
+            Order lines that use negotiated catalog prices, and what unused agreements would have saved
+          </p>
+        </div>
+        <select
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          className="h-9 px-3 border border-line rounded-xl text-sm text-ink bg-white"
+        >
+          {USAGE_PERIODS.map((p) => (
+            <option key={p.days} value={p.days}>{p.label}</option>
+          ))}
+        </select>
+      </div>
+      <dl className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {stats.map((s) => (
+          <div key={s.label}>
+            <dt className="text-xs font-medium text-ink/45">{s.label}</dt>
+            <dd className="text-xl font-semibold tracking-tight text-ink mt-1">{s.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
 }
 
 export default function ArticlesPage() {
@@ -85,6 +155,8 @@ export default function ArticlesPage() {
       </div>
 
       {error && <Alert variant="error" className="mb-6">{error}</Alert>}
+
+      <AgreementUsage />
 
       {/* Filters */}
       <div className="lio-card p-4 mb-6">

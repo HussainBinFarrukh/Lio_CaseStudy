@@ -400,6 +400,22 @@ def test_pdf_parse():
     assert r.status_code == 200, r.text
     assert "text" in r.json()  # blank page -> empty text, but parses fine
 
+    # Upper-case extension and a generic browser-reported type are still a PDF.
+    r = client.post(
+        "/pdf/parse",
+        files={"file": ("QuoteA0492_23.Pdf", buf.getvalue(), "application/octet-stream")},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+
+    # A file that claims to be a PDF but isn't one is rejected.
+    r = client.post(
+        "/pdf/parse",
+        files={"file": ("fake.pdf", b"not a pdf", "application/pdf")},
+        headers=_auth(token),
+    )
+    assert r.status_code == 400
+
     # non-PDF rejected
     r = client.post(
         "/pdf/parse",
@@ -479,8 +495,12 @@ def test_activity_log_and_document():
     client.delete(f"/requests/{rid}", headers=_auth(admin))
 
 
-def test_extraction_without_api_key():
-    r = client.post("/auth/signup", json={"email": "ex@example.com", "password": "secret123"})
+def test_extraction_without_api_key(monkeypatch):
+    # Changed for spec 001: extraction needs the caller's organization (to know
+    # who the buyer is), and failures carry a plain-language message plus an
+    # errorCode instead of technical text such as the env var name (FR-005).
+    monkeypatch.setattr("app.services.extraction.settings.openai_api_key", None)
+    r = client.post("/auth/signin", json={"email": "requester@acme.com", "password": "demo1234"})
     token = r.json()["access_token"]
 
     r = client.post("/extraction", json={"text": "Quote No. 123"}, headers=_auth(token))
@@ -489,11 +509,48 @@ def test_extraction_without_api_key():
     # Without OPENAI_API_KEY configured the endpoint reports a clean failure
     # envelope rather than an HTTP error.
     assert body["success"] is False
-    assert "OPENAI_API_KEY" in body["error"]
+    assert body["errorCode"] == "not_configured"
+    assert "OPENAI" not in body["error"]
 
     # empty text
     r = client.post("/extraction", json={"text": "  "}, headers=_auth(token))
     assert r.json()["success"] is False
+    assert r.json()["errorCode"] == "unreadable"
+
+    # A user without an organization cannot extract.
+    r = client.post("/auth/signup", json={"email": "ex@example.com", "password": "secret123"})
+    r = client.post(
+        "/extraction", json={"text": "Quote"}, headers=_auth(r.json()["access_token"])
+    )
+    assert r.status_code == 403
+
+
+def test_extraction_uses_buyer_names_and_profile_department(monkeypatch):
+    from app.models import Profile, User
+    from app.routers import extraction as extraction_router
+    from app.schemas.extraction import ExtractionResponse
+
+    captured = {}
+
+    def fake_extract(text, db, **kwargs):
+        captured.update(kwargs)
+        return ExtractionResponse(success=False, error_code="unreadable", error="x")
+
+    monkeypatch.setattr(extraction_router, "extract_vendor_data", fake_extract)
+    with TestingSession() as db:
+        user = db.scalar(select(User).where(User.email == "buyer@acme.com"))
+        db.get(Profile, user.id).department = "Facilities"
+        db.commit()
+
+    token = client.post(
+        "/auth/signin", json={"email": "buyer@acme.com", "password": "demo1234"}
+    ).json()["access_token"]
+    assert client.post("/extraction", json={"text": "Q"}, headers=_auth(token)).status_code == 200
+    # Org name + seeded aliases; department is the requester's own, not the quote's.
+    assert captured["buyer_names"] == [
+        "Acme Corp", "ACME Corp", "Lio Technologies, Inc.", "askLio"
+    ]
+    assert captured["department"] == "Facilities"
 
 
 def test_commodity_groups_expanded():
@@ -727,10 +784,11 @@ def test_org_settings_required_fields():
         headers=_auth(token),
     )
 
-    # Default settings: nothing extra required.
+    # Default settings: nothing extra required. (Changed for spec 001: settings
+    # now also include the empty buyer_aliases list.)
     r = client.get("/organizations/me/settings", headers=_auth(token))
     assert r.status_code == 200
-    assert r.json() == {"required_fields": []}
+    assert r.json() == {"required_fields": [], "buyer_aliases": []}
 
     base_payload = {
         "requestorName": "S", "titleShortDescription": "T", "vendorName": "V",
@@ -809,6 +867,412 @@ def test_org_settings_admin_only():
         headers=_auth(member),
     )
     assert r.status_code == 403
+
+
+def test_org_settings_merge_and_buyer_aliases():
+    token = client.post(
+        "/auth/signup", json={"email": "alias-admin@example.com", "password": "secret123"}
+    ).json()["access_token"]
+    client.post(
+        "/organizations", json={"name": "Alias Co", "slug": "alias-co"}, headers=_auth(token)
+    )
+
+    r = client.patch(
+        "/organizations/me/settings",
+        json={"buyer_aliases": [" Alias Company, Inc. ", "alias company, inc.", "AliasCo"]},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    # Trimmed and de-duplicated (case-insensitive).
+    assert r.json()["buyer_aliases"] == ["Alias Company, Inc.", "AliasCo"]
+
+    # Saving another setting keeps the aliases (FR-010), and vice versa.
+    r = client.patch(
+        "/organizations/me/settings", json={"required_fields": ["vat_id"]}, headers=_auth(token)
+    )
+    assert r.json() == {
+        "required_fields": ["vat_id"], "buyer_aliases": ["Alias Company, Inc.", "AliasCo"]
+    }
+    r = client.patch(
+        "/organizations/me/settings", json={"buyer_aliases": []}, headers=_auth(token)
+    )
+    assert r.json() == {"required_fields": ["vat_id"], "buyer_aliases": []}
+
+    for bad in ([""], ["x" * 121], [f"name {i}" for i in range(21)]):
+        r = client.patch(
+            "/organizations/me/settings", json={"buyer_aliases": bad}, headers=_auth(token)
+        )
+        assert r.status_code == 422, bad
+
+    # Seeded tenant: Acme starts with its aliases; buyers can read but not edit.
+    buyer = client.post(
+        "/auth/signin", json={"email": "buyer@acme.com", "password": "demo1234"}
+    ).json()["access_token"]
+    r = client.get("/organizations/me/settings", headers=_auth(buyer))
+    assert "Lio Technologies, Inc." in r.json()["buyer_aliases"]
+    r = client.patch(
+        "/organizations/me/settings", json={"buyer_aliases": []}, headers=_auth(buyer)
+    )
+    assert r.status_code == 403
+
+
+def test_request_keeps_quote_details_and_discounts():
+    token = client.post(
+        "/auth/signin", json={"email": "requester@acme.com", "password": "demo1234"}
+    ).json()["access_token"]
+    line = {
+        "positionDescription": "Moss Art Panel", "unitPrice": 894.08, "amount": 1,
+        "unit": "pieces", "discountPercent": 20, "totalPrice": 715.26,
+    }
+    payload = {
+        "requestorName": "R", "titleShortDescription": "Moss", "vendorName": "Greenmantle",
+        "vatId": "85-3252405", "commodityGroupId": 15, "totalCost": 1686.14,
+        "department": "", "orderLines": [line],
+        "quoteNumber": "4120", "quoteDate": "2023-11-28", "validUntil": "2024-01-27",
+        "currency": "usd", "netTotal": 1337.26, "shippingAmount": 215,
+        "taxAmount": 133.88, "feesAmount": None,
+    }
+    r = client.post("/requests", json=payload, headers=_auth(token))
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["quote_number"] == "4120"
+    assert created["quote_date"] == "2023-11-28"
+    assert created["quote_valid_until"] == "2024-01-27"
+    assert created["currency"] == "USD"
+    assert (created["net_total"], created["shipping_amount"], created["tax_amount"]) == (
+        1337.26, 215, 133.88
+    )
+    assert created["order_lines"][0]["discount_percent"] == 20
+
+    # The detail-page edit form doesn't send quote details: they must survive.
+    edit = {
+        "requestorName": "R", "title": "Moss panel", "vendorName": "Greenmantle",
+        "vatId": "85-3252405", "commodityGroupId": 15, "totalCost": 1686.14,
+        "department": "", "orderLines": [line],
+    }
+    r = client.put(f"/requests/{created['id']}", json=edit, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["quote_number"] == "4120"
+    assert r.json()["order_lines"][0]["discount_percent"] == 20
+
+    # Sent explicitly, they change and the edit is logged.
+    r = client.put(
+        f"/requests/{created['id']}", json=dict(edit, quoteNumber="4120-B"), headers=_auth(token)
+    )
+    assert r.json()["quote_number"] == "4120-B"
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(token)).json()
+    # (SQLite timestamps share a second here, so don't rely on ordering.)
+    assert any(a["summary"] == "Updated quote number" for a in activity)
+
+    # Discounts are validated.
+    bad = dict(payload, orderLines=[dict(line, discountPercent=150)])
+    assert client.post("/requests", json=bad, headers=_auth(token)).status_code == 422
+
+
+def _signin(email: str) -> str:
+    r = client.post("/auth/signin", json={"email": email, "password": "demo1234"})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+def test_catalog_suggestions_api_and_tenant_isolation():
+    toner = {"key": "0", "description": "Toner cartridge cyan", "unit": "pieces", "quantity": 5}
+    r = client.post(
+        "/catalog/suggestions", json={"lines": [toner]}, headers=_auth(_signin("requester@acme.com"))
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # No AI key in tests: exact-token fallback, still from Acme's catalog only.
+    assert body["source"] == "lexical"
+    assert [s["articleNumber"] for s in body["lines"][0]["suggestions"]] == [
+        "MON-00922", "BEA-01877", "DEL-00890",
+    ]
+
+    # Another tenant (empty catalog) never sees Acme's articles (SC-007).
+    r = client.post(
+        "/catalog/suggestions", json={"lines": [toner]}, headers=_auth(_signin("admin@walmart.com"))
+    )
+    assert r.json()["lines"][0]["suggestions"] == []
+
+    loner = client.post(
+        "/auth/signup", json={"email": "catalog-loner@example.com", "password": "secret123"}
+    ).json()["access_token"]
+    assert client.post(
+        "/catalog/suggestions", json={"lines": [toner]}, headers=_auth(loner)
+    ).status_code == 403
+
+
+def test_request_catalog_links_snapshot_and_alternatives():
+    # Toner lines use group 29: Acme's booking rule (spec 003) books toner under Hardware.
+    from app.models import Article, Organization, Supplier
+
+    with TestingSession() as db:
+        mon = db.scalar(select(Article).where(Article.article_number == "MON-00922"))
+        mon_id = str(mon.id)
+        walmart = db.scalar(select(Organization).where(Organization.slug == "walmart"))
+        foreign_supplier = Supplier(organization_id=walmart.id, name="Walmart Vendor")
+        db.add(foreign_supplier)
+        db.flush()
+        foreign = Article(
+            organization_id=walmart.id, article_number="WAL-1", supplier_id=foreign_supplier.id,
+            description="Toner cartridge cyan", unit_price=1, unit="piece", quantity=1,
+        )
+        db.add(foreign)
+        db.commit()
+        foreign_id = str(foreign.id)
+
+    token = _signin("requester@acme.com")
+    linked = {
+        "positionDescription": "Toner cartridge cyan", "unitPrice": 95.0, "amount": 10,
+        "unit": "piece", "totalPrice": 950.0, "catalogArticleId": mon_id,
+        "originalUnitPrice": 120.0,
+    }
+    unlinked = {
+        "positionDescription": "Toner cartridge cyan", "unitPrice": 150.0, "amount": 5,
+        "unit": "pieces", "totalPrice": 750.0,
+    }
+    payload = {
+        "requestorName": "R", "titleShortDescription": "Toner", "vendorName": "Montclair Supply Corp.",
+        "vatId": "", "commodityGroupId": 29, "totalCost": 1700.0, "department": "",
+        "orderLines": [linked, unlinked],
+    }
+    r = client.post("/requests", json=payload, headers=_auth(token))
+    assert r.status_code == 201, r.text
+    created = r.json()
+    first, second = created["order_lines"]
+    assert (first["article_number"], first["article_supplier_name"]) == (
+        "MON-00922", "Montclair Supply Corp."
+    )
+    assert (first["negotiated_unit_price"], first["original_unit_price"]) == (95.0, 120.0)
+    assert first["potential_saving"] is None
+    # Unlinked line: the cheaper agreement it ignored, for the buyer (FR-019).
+    assert (second["alternative_article_number"], second["potential_saving"]) == (
+        "MON-00922", 275.0
+    )
+    assert created["potential_saving_total"] == 275.0
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(token)).json()
+    assert any("1 of 2 lines use catalog agreements" in a["summary"] for a in activity)
+
+    # A later catalog price change doesn't rewrite the submitted agreement.
+    with TestingSession() as db:
+        db.get(Article, mon.id).unit_price = 80
+        db.commit()
+    edit = dict(payload, title="Toner refill")
+    del edit["titleShortDescription"]
+    r = client.put(f"/requests/{created['id']}", json=edit, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["order_lines"][0]["negotiated_unit_price"] == 95.0
+    with TestingSession() as db:
+        db.get(Article, mon.id).unit_price = 95
+        db.commit()
+
+    # Another organization's article can't be linked (tenant isolation).
+    bad = dict(payload, orderLines=[dict(linked, catalogArticleId=foreign_id)])
+    r = client.post("/requests", json=bad, headers=_auth(token))
+    assert r.status_code == 422 and r.json()["detail"] == "Unknown catalog article"
+
+
+def test_catalog_usage_report_admin_only():
+    from app.models import Article
+
+    admin = _signin("admin@acme.com")
+    before = client.get("/catalog/usage", headers=_auth(admin)).json()
+    with TestingSession() as db:
+        mon_id = str(db.scalar(select(Article.id).where(Article.article_number == "MON-00922")))
+    lines = [
+        {"positionDescription": "Toner cartridge cyan", "unitPrice": 95.0, "amount": 10,
+         "unit": "piece", "totalPrice": 950.0, "catalogArticleId": mon_id,
+         "originalUnitPrice": 120.0},
+        {"positionDescription": "Toner cartridge cyan", "unitPrice": 150.0, "amount": 5,
+         "unit": "pieces", "totalPrice": 750.0},
+    ]
+    r = client.post(
+        "/requests",
+        json={"requestorName": "A", "titleShortDescription": "Usage", "vendorName": "V",
+              "vatId": "", "commodityGroupId": 29, "totalCost": 1700.0, "department": "",
+              "orderLines": lines},
+        headers=_auth(admin),
+    )
+    assert r.status_code == 201, r.text
+
+    r = client.get("/catalog/usage", headers=_auth(admin))
+    assert r.status_code == 200, r.text
+    usage = r.json()
+    assert usage["lineCount"] - before["lineCount"] == 2
+    assert usage["linkedLineCount"] - before["linkedLineCount"] == 1
+    # (120 - 95) x 10 realised; (150 - 95) x 5 missed.
+    assert round(usage["realisedSavings"] - before["realisedSavings"], 2) == 250.0
+    assert round(usage["missedSavings"] - before["missedSavings"], 2) == 275.0
+    assert 0 < usage["linkedShare"] <= 1
+
+    assert client.get("/catalog/usage", headers=_auth(_signin("buyer@acme.com"))).status_code == 403
+    walmart = client.get("/catalog/usage", headers=_auth(_signin("admin@walmart.com"))).json()
+    assert walmart["lineCount"] == 0
+    r = client.get(
+        "/catalog/usage?from=2026-10-10&to=2026-10-01", headers=_auth(_signin("admin@acme.com"))
+    )
+    assert r.status_code == 422
+
+
+def _toner_request(**overrides) -> dict:
+    payload = {
+        "requestorName": "R", "titleShortDescription": "Toner", "vendorName": "Office Depot",
+        "vatId": "", "commodityGroupId": 29, "totalCost": 480.0, "department": "",
+        "orderLines": [
+            {"positionDescription": "Toner cartridge black, high-yield, HP 59A", "unitPrice": 120.0,
+             "amount": 4, "unit": "pieces", "totalPrice": 480.0}
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_classification_api_applies_org_rules_only():
+    lines = {"lines": [{"description": "Cable ties nylon 8 in, black, pack of 100",
+                        "quantity": 20, "unitPrice": 8.5, "totalPrice": 170.0}]}
+    acme = client.post("/classification", json=lines, headers=_auth(_signin("requester@acme.com")))
+    assert acme.status_code == 200, acme.text
+    body = acme.json()
+    assert (body["source"], body["commodityGroupId"], body["rule"]["name"]) == (
+        "rule", 11, "Cable ties"
+    )
+    assert "booking rule" in body["rule"]["explanation"]
+
+    walmart = client.post("/classification", json=lines, headers=_auth(_signin("admin@walmart.com")))
+    assert walmart.json()["rule"] is None and walmart.json()["source"] is None  # no AI in tests
+
+
+def test_requester_cannot_book_rule_covered_request_elsewhere():
+    token = _signin("requester@acme.com")
+    r = client.post("/requests", json=_toner_request(commodityGroupId=204), headers=_auth(token))
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Booking rule 'Printer toner' requires commodity group 29 · Hardware."
+
+    r = client.post("/requests", json=_toner_request(), headers=_auth(token))
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert (created["commodity_source"], created["booking_rule_name"]) == ("rule", "Printer toner")
+    assert created["booking_rule_line"].startswith("Toner cartridge black")
+
+    # Edits are checked the same way (FR-005).
+    edit = dict(_toner_request(), title="Toner", commodityGroupId=15)
+    del edit["titleShortDescription"]
+    r = client.put(f"/requests/{created['id']}", json=edit, headers=_auth(token))
+    assert r.status_code == 422
+
+
+def test_buyer_override_needs_reason_and_is_logged():
+    token = _signin("buyer@acme.com")
+    r = client.post("/requests", json=_toner_request(commodityGroupId=204), headers=_auth(token))
+    assert r.status_code == 422
+    assert "reason is required" in r.json()["detail"]
+
+    r = client.post(
+        "/requests",
+        json=_toner_request(commodityGroupId=204, overrideReason="Toner for the print shop budget"),
+        headers=_auth(token),
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert (created["commodity_source"], created["commodity_group_id"]) == ("override", 204)
+    assert created["override_reason"] == "Toner for the print shop budget"
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(token)).json()
+    assert any(a["action"] == "commodity_override" and "print shop" in a["summary"] for a in activity)
+
+    # A requester editing that request keeps the buyer's override.
+    edit = dict(_toner_request(commodityGroupId=204), title="Toner (print shop)")
+    del edit["titleShortDescription"]
+    r = client.put(
+        f"/requests/{created['id']}", json=edit, headers=_auth(_signin("requester@acme.com"))
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["commodity_source"] == "override"
+
+
+def test_other_orgs_and_unruled_items_are_unaffected():
+    walmart = _signin("admin@walmart.com")
+    r = client.post("/requests", json=_toner_request(commodityGroupId=204), headers=_auth(walmart))
+    assert r.status_code == 201, r.text
+    assert r.json()["commodity_source"] == "manual" and r.json()["booking_rule_name"] is None
+
+    paper = _toner_request(
+        commodityGroupId=201, commoditySource="system",
+        orderLines=[{"positionDescription": "Copy paper letter size", "unitPrice": 49.0,
+                     "amount": 3, "unit": "case", "totalPrice": 147.0}],
+    )
+    r = client.post("/requests", json=paper, headers=_auth(_signin("requester@acme.com")))
+    assert r.status_code == 201 and r.json()["commodity_source"] == "system"
+
+
+def test_booking_rule_management_admin_only_and_audited():
+    admin = _signin("admin@acme.com")
+    rules = client.get("/booking-rules", headers=_auth(admin)).json()
+    assert {r["name"] for r in rules} >= {"Cable ties", "Printer toner", "Small software subscriptions"}
+    assert client.get("/booking-rules", headers=_auth(_signin("buyer@acme.com"))).status_code == 403
+
+    new_rule = {
+        "name": "Label printer tape", "description": "Label tape is office supplies",
+        "include_terms": ["label tape", "label printer tape"], "exclude_terms": [],
+        "target_commodity_group_id": 15,
+    }
+    r = client.post("/booking-rules", json=new_rule, headers=_auth(admin))
+    assert r.status_code == 201, r.text
+    rule_id = r.json()["rule"]["id"]
+    assert r.json()["rule"]["target_commodity_group_name"] == "Office Equipment"
+
+    # The new rule applies to the next request right away (SC-006).
+    lines = {"lines": [{"description": "Label printer tape 12 mm", "totalPrice": 30.0}]}
+    r = client.post("/classification", json=lines, headers=_auth(_signin("requester@acme.com")))
+    assert (r.json()["commodityGroupId"], r.json()["rule"]["name"]) == (15, "Label printer tape")
+
+    assert client.post("/booking-rules", json=new_rule, headers=_auth(admin)).status_code == 409
+    bad = dict(new_rule, name="Bad", target_commodity_group_id=999999)
+    assert client.post("/booking-rules", json=bad, headers=_auth(admin)).status_code == 422
+    overlap = dict(new_rule, name="Toner again", include_terms=["toner*"])
+    r = client.post("/booking-rules", json=overlap, headers=_auth(admin))
+    assert r.status_code == 201 and r.json()["warnings"]
+    client.delete(f"/booking-rules/{r.json()['rule']['id']}", headers=_auth(admin))
+
+    r = client.put(
+        f"/booking-rules/{rule_id}", json=dict(new_rule, active=False), headers=_auth(admin)
+    )
+    assert r.status_code == 200 and r.json()["rule"]["active"] is False
+    events = client.get("/booking-rules/events", headers=_auth(admin)).json()
+    assert {"created", "updated", "deleted"} <= {e["action"] for e in events}
+    assert any("Label printer tape" in e["summary"] for e in events)
+
+    # Other organizations can't see or touch Acme's rules.
+    walmart = _signin("admin@walmart.com")
+    assert client.get("/booking-rules", headers=_auth(walmart)).json() == []
+    assert client.delete(f"/booking-rules/{rule_id}", headers=_auth(walmart)).status_code == 404
+    assert client.delete(f"/booking-rules/{rule_id}", headers=_auth(admin)).status_code == 204
+
+
+def test_check_and_rebook_existing_requests():
+    from app.models import ProcurementRequest
+
+    token = _signin("requester@acme.com")
+    created = client.post("/requests", json=_toner_request(), headers=_auth(token)).json()
+    # Simulate a request booked before the rule existed.
+    with TestingSession() as db:
+        request = db.get(ProcurementRequest, uuid.UUID(created["id"]))
+        request.commodity_group_id, request.commodity_source = 204, "manual"
+        db.commit()
+
+    admin = _signin("admin@acme.com")
+    found = client.get("/booking-rules/check", headers=_auth(admin)).json()
+    mine = [f for f in found if f["request_id"] == created["id"]]
+    assert mine and (mine[0]["current_group_id"], mine[0]["mandated_group_id"]) == (204, 29)
+
+    r = client.post(
+        "/booking-rules/rebook", json={"requestIds": [created["id"]]}, headers=_auth(admin)
+    )
+    assert r.json() == {"rebooked": 1}
+    after = client.get(f"/requests/{created['id']}", headers=_auth(admin)).json()
+    assert (after["commodity_group_id"], after["commodity_source"]) == (29, "rule")
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(admin)).json()
+    assert any(a["action"] == "rebooked" for a in activity)
+    assert client.get("/booking-rules/check", headers=_auth(_signin("buyer@acme.com"))).status_code == 403
 
 
 if __name__ == "__main__":

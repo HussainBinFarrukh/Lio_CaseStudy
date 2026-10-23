@@ -1,0 +1,205 @@
+{
+ "_comment": "Spec 002 Appendix A reference scenarios against Acme's seeded catalog. Used by scripts/eval_suggestions.py. line_effect: negative = saving, positive = more expensive (for the whole line).",
+ "lines": [
+  {
+   "id": "R1",
+   "description": "verdeform CUSTOM - sq ft Module - forest & ball moss variant",
+   "unit": "sq ft",
+   "quantity": 13.78,
+   "unit_price": 52.0,
+   "total_price": 716.56,
+   "expected": [
+    "HAR-00172"
+   ],
+   "first": "HAR-00172",
+   "must_not": [
+    "floor mat logo mat"
+   ],
+   "effects": {
+    "HAR-00172": -102.11
+   }
+  },
+  {
+   "id": "R2",
+   "description": "Moss Art Panel, Mixed Moss 63 x 31.5 in",
+   "unit": "pieces",
+   "quantity": 1,
+   "unit_price": 894.08,
+   "discount_percent": 20,
+   "total_price": 715.26,
+   "expected": [
+    "RED-00196",
+    "HAR-00172"
+   ],
+   "first": null,
+   "must_not": [
+    "floor mat logo mat"
+   ],
+   "effects": {
+    "RED-00196": -395.26,
+    "HAR-00172": null
+   }
+  },
+  {
+   "id": "R3",
+   "description": "Moss panel \"70:30\" with \"askLio\" lettering",
+   "unit": "pieces",
+   "quantity": 1,
+   "unit_price": 1560.0,
+   "total_price": 1560.0,
+   "expected": [
+    "RED-00196"
+   ],
+   "first": "RED-00196",
+   "must_not": [
+    "floor mat logo mat",
+    "modular living green plant wall"
+   ],
+   "effects": {
+    "RED-00196": -1240.0
+   }
+  },
+  {
+   "id": "R4",
+   "description": "Logo acrylic white 3/16 in length 31.5 in with standoffs",
+   "unit": "pieces",
+   "quantity": 1,
+   "unit_price": 350.0,
+   "total_price": 350.0,
+   "expected": [],
+   "first": null,
+   "must_not": [
+    "desk organizer acrylic",
+    "floor mat logo mat"
+   ],
+   "effects": {}
+  },
+  {
+   "id": "R5",
+   "description": "13\" MacBook Air: Apple M2 Chip - Space Gray",
+   "unit": "pieces",
+   "quantity": 1,
+   "unit_price": 1409.06,
+   "total_price": 1409.06,
+   "expected": [
+    "DEL-00905",
+    "GRA-01344",
+    "AUR-00413"
+   ],
+   "first": "DEL-00905",
+   "must_not": [],
+   "effects": {
+    "DEL-00905": 28.94,
+    "AUR-00413": 240.94
+   }
+  },
+  {
+   "id": "R6",
+   "description": "Grinding machine HW-GS 450",
+   "unit": "pieces",
+   "quantity": 1,
+   "unit_price": 15000.0,
+   "total_price": 15000.0,
+   "expected": [],
+   "first": null,
+   "must_not": [
+    "cnc machining",
+    "stretch film machine"
+   ],
+   "effects": {}
+  },
+  {
+   "id": "R7",
+   "description": "Delivery and installation",
+   "unit": "lump sum",
+   "quantity": 1,
+   "unit_price": 2000.0,
+   "total_price": 2000.0,
+   "expected": [],
+   "first": null,
+   "must_not": [
+    "last-mile delivery"
+   ],
+   "effects": {}
+  },
+  {
+   "id": "R8",
+   "description": "Toner cartridge cyan",
+   "unit": "pieces",
+   "quantity": 5,
+   "unit_price": null,
+   "total_price": null,
+   "expected": [
+    "MON-00922",
+    "BEA-01877",
+    "DEL-00890"
+   ],
+   "first": "MON-00922",
+   "must_not": [
+    "toner cartridge magenta",
+    "toner cartridge yellow",
+    "toner cartridge black"
+   ],
+   "effects": {}
+  },
+  {
+   "id": "R9",
+   "description": "Toner cartridge cyan",
+   "unit": "pieces",
+   "quantity": 5,
+   "unit_price": 150.0,
+   "total_price": 750.0,
+   "expected": [
+    "MON-00922"
+   ],
+   "first": "MON-00922",
+   "must_not": [
+    "toner cartridge magenta",
+    "toner cartridge yellow",
+    "toner cartridge black"
+   ],
+   "effects": {
+    "MON-00922": -275.0
+   }
+  },
+  {
+   "id": "R10",
+   "description": "Business laptop 14 inch i7 32GB",
+   "unit": "pieces",
+   "quantity": 1,
+   "unit_price": null,
+   "total_price": null,
+   "expected": [
+    "LUM-00440",
+    "PIN-01868",
+    "VER-00379"
+   ],
+   "first": "LUM-00440",
+   "must_not": [
+    "docking station",
+    "keyboard and mouse"
+   ],
+   "effects": {}
+  },
+  {
+   "id": "R11",
+   "description": "Toner cartridge cyan",
+   "unit": "pieces",
+   "quantity": 10,
+   "unit_price": 120.0,
+   "total_price": 1200.0,
+   "vendor_name": "Montclair Supply Corp",
+   "expected": [
+    "MON-00922"
+   ],
+   "first": "MON-00922",
+   "must_not": [
+    "toner cartridge magenta",
+    "toner cartridge yellow"
+   ],
+   "effects": {},
+   "agreement_difference": 25.0,
+   "contracted_supplier": "Montclair Supply Corp."
+  }
+ ]
+}

@@ -64,11 +64,61 @@ npm install
 npm run dev
 ```
 
+## PDF extraction
+
+`.env.example` lists every setting (`OPENAI_API_KEY`, `OPENAI_MODEL`,
+`OPENAI_TIMEOUT_SECONDS`, `OPENAI_MAX_RETRIES`, `JWT_SECRET`). Extraction reads
+the PDF in layout order, asks the model for a fixed (Structured Outputs) schema,
+then applies deterministic rules in `backend/app/services/quote_rules.py`:
+the buyer is never the vendor, tax IDs must be a 9-digit EIN, alternatives /
+headings / upsells are excluded from the order lines, discounts are kept, the
+request total is the **grand total**, and lines are reconciled against the
+quote's totals. Failures come back as plain-language messages with an
+`errorCode`; each extraction logs one diagnostics line (no document text).
+
+The names an organization appears under on quotes ("buyer aliases") are an
+admin setting under **Organization → Settings**; Acme is seeded with
+`ACME Corp`, `Lio Technologies, Inc.` and `askLio`.
+
+## Catalog suggestions (negotiated prices)
+
+While a request is built, each order line shows matching articles from the
+organization's own catalog with supplier, negotiated price and the saving (or
+extra cost) for the line's quantity; **Use this** applies one (undoable), and
+the line then records the agreement it uses. Matching = embeddings retrieve the
+closest catalog descriptions, then a small model confirms they are the *same
+kind of item* (so "Desk organizer acrylic" is never suggested for an acrylic
+logo); ranking, units, savings and minimum order quantities are plain code in
+`backend/app/services/catalog_matching.py`. The catalog is embedded at startup
+(`python -m app.embed_catalog`, idempotent); without `OPENAI_API_KEY`
+suggestions fall back to exact-word matches. Buyers see unused cheaper
+agreements on the request page and in Approvals; admins see agreement usage on
+the Articles page.
+
+## Commodity groups and booking rules
+
+Each request's commodity group is decided in its own step once the order
+lines are known: first the organization's **booking rules** (admin-managed
+under **Organization → Booking rules**; Acme is seeded with cable ties →
+Electrical Engineering, printer toner → Hardware, small software
+subscriptions → Office Equipment), otherwise a **system proposal** (embeddings
+shortlist the base groups, a small model picks one). Rules are deterministic
+include/exclude terms with an optional yearly amount limit; the highest-value
+line decides mixed requests. Requesters can't book a rule-covered request
+elsewhere (enforced by the API); buyers and admins can, with a logged reason.
+Lines that merely resemble a rule get an "Apply rule" hint instead of a silent
+change. Admins can check existing requests against the rules and re-book them.
+
 ## Tests
 
 ```bash
-cd backend && python -m pytest      # API tests (in-memory SQLite)
+cd backend && python -m pytest      # API + extraction tests (in-memory SQLite, no network)
 cd frontend && npx tsc --noEmit && npm run build
+
+# Live accuracy checks (need OPENAI_API_KEY):
+cd backend && python scripts/eval_extraction.py --runs 3    # reference quotes in ../quotes
+cd backend && python scripts/eval_suggestions.py --runs 3   # catalog suggestion scenarios
+cd backend && python scripts/eval_classification.py --runs 3 # booking rules + classification
 ```
 
 ## Layout

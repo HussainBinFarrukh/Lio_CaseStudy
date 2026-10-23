@@ -60,7 +60,24 @@ export type ProcurementRequest = {
   approval_status: 'pending' | 'approved' | 'rejected';
   approved_by: string | null;
   approved_at: string | null;
+  /** Grand total (net + shipping + tax + fees). */
   total_cost: number | null;
+  net_total: number | null;
+  shipping_amount: number | null;
+  tax_amount: number | null;
+  fees_amount: number | null;
+  currency: string | null;
+  quote_number: string | null;
+  quote_date: string | null;
+  quote_valid_until: string | null;
+  /** Saving available from catalog alternatives that were not used. */
+  potential_saving_total: number | null;
+  /** How the commodity group was decided (booking rules, spec 003). */
+  commodity_source: 'rule' | 'system' | 'manual' | 'override' | null;
+  booking_rule_id: string | null;
+  booking_rule_name: string | null;
+  booking_rule_line: string | null;
+  override_reason: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -72,7 +89,22 @@ export type OrderLine = {
   unit_price: number;
   amount: number;
   unit: string;
+  discount_percent: number;
+  /** Net of discount. */
   total_price: number;
+  /** Catalog agreement used (snapshot at linking time). */
+  catalog_article_id: string | null;
+  article_number: string | null;
+  article_description: string | null;
+  article_supplier_name: string | null;
+  negotiated_unit_price: number | null;
+  article_min_quantity: number | null;
+  original_unit_price: number | null;
+  /** Cheapest matching catalog article that was not used. */
+  alternative_article_number: string | null;
+  alternative_supplier_name: string | null;
+  alternative_unit_price: number | null;
+  potential_saving: number | null;
   line_order: number;
   created_at: string;
 };

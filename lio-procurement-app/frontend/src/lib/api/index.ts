@@ -47,6 +47,8 @@ export type ConfigurableRequiredField = 'vat_id' | 'department';
 
 export interface OrganizationSettings {
   required_fields: ConfigurableRequiredField[];
+  /** Other names the organization appears under on vendor quotes. */
+  buyer_aliases: string[];
 }
 
 export interface MembersResponse {
@@ -59,21 +61,176 @@ export interface OrderLineInput {
   unitPrice: number;
   amount: number;
   unit: string;
+  /** 0–100; the line total is net of it. */
+  discountPercent?: number;
   totalPrice: number;
+  /** Catalog agreement applied to the line; the server snapshots its price. */
+  catalogArticleId?: string | null;
+  /** The quoted price before the catalog article was applied. */
+  originalUnitPrice?: number | null;
 }
 
-export interface CreateRequestInput {
+// Catalog suggestions (negotiated prices) for order lines.
+export interface SuggestionLineInput {
+  key: string;
+  description: string;
+  unit: string;
+  quantity: number;
+  unitPrice?: number | null;
+  discountPercent?: number;
+  totalPrice?: number | null;
+  currency?: string;
+}
+
+export interface ArticleSuggestion {
+  articleId: string;
+  articleNumber: string;
+  description: string;
+  supplierId: string;
+  supplierName: string;
+  supplierVatId: string | null;
+  unitPrice: number;
+  unit: string;
+  currency: string;
+  minQuantity: number;
+  relevance: number;
+  /** Units and currency comparable with the line. */
+  comparable: boolean;
+  unitDifference: number | null;
+  /** Negative = saving for the line's quantity, positive = more expensive. */
+  lineEffect: number | null;
+  belowMinQuantity: boolean;
+  fromVendor: boolean;
+}
+
+export interface LineSuggestions {
+  key: string;
+  suggestions: ArticleSuggestion[];
+  agreementCheck: { articleNumber: string; negotiatedPrice: number; difference: number } | null;
+}
+
+export interface SuggestionsResponse {
+  source: 'semantic' | 'lexical';
+  contractedSupplier: { id: string; name: string } | null;
+  lines: LineSuggestions[];
+}
+
+// Commodity classification and booking rules (spec 003).
+export interface ClassificationLineInput {
+  description: string;
+  quantity?: number;
+  unitPrice?: number | null;
+  totalPrice?: number | null;
+}
+
+export interface RuleHint {
+  ruleId: string;
+  ruleName: string;
+  targetGroupId: number;
+  lineIndex: number;
+  message: string;
+}
+
+export interface ClassificationResult {
+  commodityGroupId: number | null;
+  commodityGroupName: string | null;
+  source: 'rule' | 'system' | null;
+  rule: { id: string; name: string; targetGroupId: number; explanation: string } | null;
+  decidingLine: { index: number; description: string } | null;
+  splitAdvice: boolean;
+  hints: RuleHint[];
+}
+
+export interface BookingRule {
+  id: string;
+  name: string;
+  description: string;
+  include_terms: string[];
+  exclude_terms: string[];
+  max_annual_amount: number | null;
+  target_commodity_group_id: number;
+  target_commodity_group_name: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookingRuleInput {
+  name: string;
+  description: string;
+  include_terms: string[];
+  exclude_terms: string[];
+  max_annual_amount: number | null;
+  target_commodity_group_id: number;
+  active: boolean;
+}
+
+export interface BookingRuleEvent {
+  id: string;
+  rule_id: string | null;
+  actor_id: string | null;
+  action: 'created' | 'updated' | 'deleted';
+  summary: string;
+  created_at: string;
+}
+
+export interface MisbookedRequest {
+  request_id: string;
+  title: string;
+  current_group_id: number | null;
+  mandated_group_id: number;
+  rule_id: string;
+  rule_name: string;
+  deciding_line: string;
+  created_at: string;
+}
+
+export interface CatalogUsage {
+  from: string;
+  to: string;
+  requestCount: number;
+  lineCount: number;
+  linkedLineCount: number;
+  linkedShare: number;
+  realisedSavings: number;
+  missedSavings: number;
+}
+
+/** Vendor-quote details captured at extraction (all optional). */
+export interface QuoteDetailsInput {
+  quoteNumber?: string | null;
+  quoteDate?: string | null; // YYYY-MM-DD
+  validUntil?: string | null; // YYYY-MM-DD
+  currency?: string | null;
+  netTotal?: number | null;
+  shippingAmount?: number | null;
+  taxAmount?: number | null;
+  feesAmount?: number | null;
+}
+
+/** How the commodity group was chosen (booking rules, spec 003). */
+export interface ClassificationChoiceInput {
+  /** Whether the system's proposal was kept or the requester picked a group. */
+  commoditySource?: 'system' | 'manual';
+  /** A booking-rule hint the requester accepted. */
+  bookingRuleId?: string | null;
+  /** Required for buyers/admins booking a rule-covered request elsewhere. */
+  overrideReason?: string | null;
+}
+
+export interface CreateRequestInput extends QuoteDetailsInput, ClassificationChoiceInput {
   requestorName: string;
   titleShortDescription: string;
   vendorName: string;
   vatId: string;
   commodityGroupId: number;
+  /** Grand total (net + shipping + tax + fees). */
   totalCost: number;
   department: string;
   orderLines: OrderLineInput[];
 }
 
-export interface UpdateRequestInput {
+export interface UpdateRequestInput extends QuoteDetailsInput, ClassificationChoiceInput {
   requestorName: string;
   title: string;
   vendorName: string;
@@ -82,6 +239,30 @@ export interface UpdateRequestInput {
   totalCost: number;
   department: string;
   orderLines: OrderLineInput[];
+}
+
+export type FieldStatus = 'extracted' | 'not_in_document' | 'could_not_extract';
+
+export interface QuoteTotals {
+  netTotal: number | null;
+  shipping: number | null;
+  tax: number | null;
+  fees: number | null;
+  grandTotal: number | null;
+}
+
+export interface ExcludedPosition {
+  itemNo: string | null;
+  description: string;
+  amount: number | null;
+  reason: 'alternative' | 'heading' | 'promotional';
+}
+
+export interface ReconciliationFinding {
+  scope: 'line' | 'net_total' | 'grand_total';
+  lineIndex: number | null;
+  expected: number;
+  extracted: number;
 }
 
 export interface ExtractedVendorData {
@@ -89,16 +270,35 @@ export interface ExtractedVendorData {
   vendorName: string;
   vatId: string;
   department: string;
+  quoteNumber: string | null;
+  quoteDate: string | null;
+  validUntil: string | null;
+  currency: string;
   orderLines: OrderLineInput[];
+  totals: QuoteTotals;
+  /** Grand total. */
   totalCost: number;
   commodityGroupId: number | null;
   commodityGroupName: string | null;
+  excludedPositions: ExcludedPosition[];
+  reconciliation: ReconciliationFinding[];
+  fieldStatus: Record<string, FieldStatus>;
 }
+
+export type ExtractionErrorCode =
+  | 'not_configured'
+  | 'service_busy'
+  | 'refused'
+  | 'too_long'
+  | 'unreadable';
 
 export interface ExtractionResponse {
   success: boolean;
+  extractionId?: string | null;
   data?: ExtractedVendorData;
   error?: string;
+  errorCode?: ExtractionErrorCode | null;
+  /** Fields the requester must fill in (could not be extracted). */
   missingFields?: string[];
 }
 
@@ -260,7 +460,8 @@ export const organizations = {
     return apiFetch('/organizations/me/settings');
   },
 
-  updateSettings(settings: OrganizationSettings): Promise<OrganizationSettings> {
+  /** Updates only the keys given; the server keeps the other settings. */
+  updateSettings(settings: Partial<OrganizationSettings>): Promise<OrganizationSettings> {
     return apiFetch('/organizations/me/settings', { method: 'PATCH', body: settings });
   },
 };
@@ -332,5 +533,62 @@ export const pdf = {
 export const extraction = {
   extract(text: string): Promise<ExtractionResponse> {
     return apiFetch('/extraction', { body: { text } });
+  },
+};
+
+// ============================================================================
+// Commodity classification and booking rules
+// ============================================================================
+
+export const classification = {
+  classify(lines: ClassificationLineInput[]): Promise<ClassificationResult> {
+    return apiFetch('/classification', { body: { lines } });
+  },
+};
+
+export const bookingRules = {
+  list(): Promise<BookingRule[]> {
+    return apiFetch('/booking-rules');
+  },
+  create(input: BookingRuleInput): Promise<{ rule: BookingRule; warnings: string[] }> {
+    return apiFetch('/booking-rules', { body: input });
+  },
+  update(id: string, input: BookingRuleInput): Promise<{ rule: BookingRule; warnings: string[] }> {
+    return apiFetch(`/booking-rules/${id}`, { method: 'PUT', body: input });
+  },
+  remove(id: string): Promise<void> {
+    return apiFetch(`/booking-rules/${id}`, { method: 'DELETE' });
+  },
+  events(): Promise<BookingRuleEvent[]> {
+    return apiFetch('/booking-rules/events');
+  },
+  check(): Promise<MisbookedRequest[]> {
+    return apiFetch('/booking-rules/check');
+  },
+  rebook(requestIds: string[]): Promise<{ rebooked: number }> {
+    return apiFetch('/booking-rules/rebook', { body: { requestIds } });
+  },
+};
+
+// ============================================================================
+// Catalog (negotiated-price suggestions, agreement usage)
+// ============================================================================
+
+export const catalog = {
+  suggest(input: {
+    lines: SuggestionLineInput[];
+    vendorName?: string;
+    vendorVatId?: string;
+    limit?: number;
+  }): Promise<SuggestionsResponse> {
+    return apiFetch('/catalog/suggestions', { body: input });
+  },
+
+  usage(params?: { from?: string; to?: string }): Promise<CatalogUsage> {
+    const qs = new URLSearchParams();
+    if (params?.from) qs.set('from', params.from);
+    if (params?.to) qs.set('to', params.to);
+    const query = qs.toString();
+    return apiFetch(`/catalog/usage${query ? `?${query}` : ''}`);
   },
 };

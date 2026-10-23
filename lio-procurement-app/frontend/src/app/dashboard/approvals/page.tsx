@@ -102,6 +102,12 @@ export default function ApprovalsPage() {
                     {request.vendor_name}
                     {request.commodity_groups ? ` · ${request.commodity_groups.name}` : ''}
                   </p>
+                  {request.potential_saving_total ? (
+                    <p className="text-sm text-amber-800 mt-0.5">
+                      Unused catalog agreements: potential saving $
+                      {request.potential_saving_total.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="text-lg font-semibold text-ink whitespace-nowrap">
                   ${(request.total_cost || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}

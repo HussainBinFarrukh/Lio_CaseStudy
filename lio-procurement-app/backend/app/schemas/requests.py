@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 RequestStatus = Literal["open", "in_progress", "closed"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
@@ -17,10 +17,57 @@ class OrderLineIn(BaseModel):
     unit_price: float = Field(alias="unitPrice")
     amount: float
     unit: str
+    discount_percent: float = Field(default=0, ge=0, lt=100, alias="discountPercent")
+    # Net of discount.
     total_price: float = Field(alias="totalPrice")
+    # Catalog agreement applied to this line (spec 002). The server copies the
+    # article's number, supplier and negotiated price from the catalog itself.
+    catalog_article_id: uuid.UUID | None = Field(default=None, alias="catalogArticleId")
+    # The quoted price before the article was applied (realised-savings basis).
+    original_unit_price: float | None = Field(default=None, ge=0, alias="originalUnitPrice")
 
 
-class RequestCreate(BaseModel):
+class QuoteDetailsIn(BaseModel):
+    """Optional vendor-quote details captured at extraction (all nullable)."""
+
+    quote_number: str | None = Field(default=None, alias="quoteNumber")
+    quote_date: date | None = Field(default=None, alias="quoteDate")
+    quote_valid_until: date | None = Field(default=None, alias="validUntil")
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    net_total: float | None = Field(default=None, ge=0, alias="netTotal")
+    shipping_amount: float | None = Field(default=None, ge=0, alias="shippingAmount")
+    tax_amount: float | None = Field(default=None, ge=0, alias="taxAmount")
+    fees_amount: float | None = Field(default=None, ge=0, alias="feesAmount")
+
+    @field_validator("currency")
+    @classmethod
+    def upper_currency(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @field_validator("quote_number")
+    @classmethod
+    def blank_quote_number(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
+
+
+# Request columns set from QuoteDetailsIn (same names on both sides).
+QUOTE_DETAIL_FIELDS = tuple(QuoteDetailsIn.model_fields)
+
+
+class ClassificationChoiceIn(BaseModel):
+    """How the client arrived at the commodity group (spec 003)."""
+
+    # Whether the requester kept the system's proposal or picked a group.
+    commodity_source: Literal["system", "manual"] = Field(
+        default="manual", alias="commoditySource"
+    )
+    # A booking-rule hint the requester accepted (its target must be the group).
+    booking_rule_id: uuid.UUID | None = Field(default=None, alias="bookingRuleId")
+    # Required for buyers/admins booking a rule-covered request elsewhere.
+    override_reason: str | None = Field(default=None, max_length=500, alias="overrideReason")
+
+
+class RequestCreate(QuoteDetailsIn, ClassificationChoiceIn):
     requestor_name: str = Field(alias="requestorName")
     title: str = Field(alias="titleShortDescription")
     vendor_name: str = Field(alias="vendorName")
@@ -31,7 +78,7 @@ class RequestCreate(BaseModel):
     order_lines: list[OrderLineIn] = Field(alias="orderLines", min_length=1)
 
 
-class RequestUpdate(BaseModel):
+class RequestUpdate(QuoteDetailsIn, ClassificationChoiceIn):
     requestor_name: str = Field(alias="requestorName")
     title: str
     vendor_name: str = Field(alias="vendorName")
@@ -71,9 +118,23 @@ class OrderLineOut(BaseModel):
     unit_price: float
     amount: float
     unit: str
+    discount_percent: float
     total_price: float
     line_order: int
     created_at: datetime
+    # Catalog agreement used (snapshot at linking time).
+    catalog_article_id: uuid.UUID | None = None
+    article_number: str | None = None
+    article_description: str | None = None
+    article_supplier_name: str | None = None
+    negotiated_unit_price: float | None = None
+    article_min_quantity: float | None = None
+    original_unit_price: float | None = None
+    # Cheapest matching catalog article that was not used.
+    alternative_article_number: str | None = None
+    alternative_supplier_name: str | None = None
+    alternative_unit_price: float | None = None
+    potential_saving: float | None = None
 
 
 class RequestActivityOut(BaseModel):
@@ -106,6 +167,20 @@ class RequestOut(BaseModel):
     approved_by: uuid.UUID | None
     approved_at: datetime | None
     total_cost: float | None
+    net_total: float | None
+    shipping_amount: float | None
+    tax_amount: float | None
+    fees_amount: float | None
+    currency: str | None
+    quote_number: str | None
+    quote_date: date | None
+    quote_valid_until: date | None
+    # How the commodity group was decided (spec 003).
+    commodity_source: Literal["rule", "system", "manual", "override"] | None = None
+    booking_rule_id: uuid.UUID | None = None
+    booking_rule_name: str | None = None
+    booking_rule_line: str | None = None
+    override_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     order_lines: list[OrderLineOut]
@@ -114,3 +189,10 @@ class RequestOut(BaseModel):
     commodity_groups: CommodityGroupOut | None = Field(
         default=None, validation_alias="commodity_group"
     )
+
+    @computed_field
+    @property
+    def potential_saving_total(self) -> float | None:
+        """Total saving available from catalog alternatives that were not used."""
+        savings = [line.potential_saving for line in self.order_lines if line.potential_saving]
+        return round(sum(savings), 2) if savings else None

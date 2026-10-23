@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import * as api from '@/lib/api';
 import { Button, Input, Alert } from '@/components/base';
+import { BookingRulesPanel } from '@/components/BookingRulesPanel';
 import type { OrganizationMemberWithProfile, OrganizationInvite } from '@/types/database';
 
-type Tab = 'members' | 'settings';
+type Tab = 'members' | 'settings' | 'rules';
 
 const ROLE_BADGES: Record<string, string> = {
   admin: 'bg-ink text-white',
@@ -26,6 +27,8 @@ export default function OrganizationPage() {
   const [organizationName, setOrganizationName] = useState<string>('');
   const [role, setRole] = useState<api.MemberRole | null>(null);
   const [requiredFields, setRequiredFields] = useState<api.ConfigurableRequiredField[]>([]);
+  const [buyerAliases, setBuyerAliases] = useState<string[]>([]);
+  const [newAlias, setNewAlias] = useState('');
   const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
@@ -48,6 +51,7 @@ export default function OrganizationPage() {
       setMembers(result.members);
       setInvites(result.invites);
       setRequiredFields(settings.required_fields);
+      setBuyerAliases(settings.buyer_aliases);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load organization');
     }
@@ -113,6 +117,26 @@ export default function OrganizationPage() {
     setSavingSettings(false);
   };
 
+  const saveBuyerAliases = async (next: string[]) => {
+    setSavingSettings(true);
+    setError('');
+    setSuccess('');
+    try {
+      const saved = await api.organizations.updateSettings({ buyer_aliases: next });
+      setBuyerAliases(saved.buyer_aliases);
+      setNewAlias('');
+      setSuccess('Settings updated');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update settings');
+    }
+    setSavingSettings(false);
+  };
+
+  const addBuyerAlias = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newAlias.trim()) saveBuyerAliases([...buyerAliases, newAlias.trim()]);
+  };
+
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -150,6 +174,7 @@ export default function OrganizationPage() {
           [
             { key: 'members', label: 'Members' },
             { key: 'settings', label: 'Settings' },
+            { key: 'rules', label: 'Booking rules' },
           ] as { key: Tab; label: string }[]
         ).map((t) => (
           <button
@@ -266,7 +291,52 @@ export default function OrganizationPage() {
         </>
       )}
 
+      {tab === 'rules' && <BookingRulesPanel />}
+
       {tab === 'settings' && (
+        <>
+        <div className="lio-card p-6 mb-6">
+          <h2 className="text-xl font-semibold tracking-tight text-ink">Names on Vendor Quotes</h2>
+          <p className="text-sm text-ink/55 mt-1 mb-4">
+            Other names your company appears under on quotes (legal entity, brand, abbreviations).
+            PDF extraction never takes these — or &ldquo;{organizationName}&rdquo; — as the vendor.
+          </p>
+          {buyerAliases.length > 0 && (
+            <ul className="divide-y divide-line rounded-xl border border-line mb-4">
+              {buyerAliases.map((alias) => (
+                <li key={alias} className="flex items-center justify-between gap-4 px-4 py-3">
+                  <span className="text-sm text-ink">{alias}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={savingSettings}
+                    onClick={() => saveBuyerAliases(buyerAliases.filter((a) => a !== alias))}
+                  >
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form onSubmit={addBuyerAlias} className="flex flex-col sm:flex-row gap-3">
+            <Input
+              value={newAlias}
+              onChange={(e) => setNewAlias(e.target.value)}
+              placeholder="e.g. Acme Holdings, Inc."
+              maxLength={120}
+              className="flex-1"
+              disabled={savingSettings}
+            />
+            <Button
+              type="submit"
+              loading={savingSettings}
+              disabled={savingSettings || !newAlias.trim()}
+              className="min-w-[140px]"
+            >
+              Add Name
+            </Button>
+          </form>
+        </div>
         <div className="lio-card p-6">
           <h2 className="text-xl font-semibold tracking-tight text-ink">Request Settings</h2>
           <p className="text-sm text-ink/55 mt-1 mb-4">
@@ -293,6 +363,7 @@ export default function OrganizationPage() {
             })}
           </div>
         </div>
+        </>
       )}
     </div>
   );

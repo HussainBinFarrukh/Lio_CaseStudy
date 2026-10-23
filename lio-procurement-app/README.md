@@ -95,6 +95,20 @@ suggestions fall back to exact-word matches. Buyers see unused cheaper
 agreements on the request page and in Approvals; admins see agreement usage on
 the Articles page.
 
+## Commodity groups and booking rules
+
+Each request's commodity group is decided in its own step once the order
+lines are known: first the organization's **booking rules** (admin-managed
+under **Organization → Booking rules**; Acme is seeded with cable ties →
+Electrical Engineering, printer toner → Hardware, small software
+subscriptions → Office Equipment), otherwise a **system proposal** (embeddings
+shortlist the base groups, a small model picks one). Rules are deterministic
+include/exclude terms with an optional yearly amount limit; the highest-value
+line decides mixed requests. Requesters can't book a rule-covered request
+elsewhere (enforced by the API); buyers and admins can, with a logged reason.
+Lines that merely resemble a rule get an "Apply rule" hint instead of a silent
+change. Admins can check existing requests against the rules and re-book them.
+
 ## Tests
 
 ```bash
@@ -104,6 +118,7 @@ cd frontend && npx tsc --noEmit && npm run build
 # Live accuracy checks (need OPENAI_API_KEY):
 cd backend && python scripts/eval_extraction.py --runs 3    # reference quotes in ../quotes
 cd backend && python scripts/eval_suggestions.py --runs 3   # catalog suggestion scenarios
+cd backend && python scripts/eval_classification.py --runs 3 # booking rules + classification
 ```
 
 ## Layout

@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import * as api from '@/lib/api';
 import { Button, Input, Alert } from '@/components/base';
+import { BookingRulesPanel } from '@/components/BookingRulesPanel';
 import type { OrganizationMemberWithProfile, OrganizationInvite } from '@/types/database';
 
-type Tab = 'members' | 'settings';
+type Tab = 'members' | 'settings' | 'rules';
 
 const ROLE_BADGES: Record<string, string> = {
   admin: 'bg-ink text-white',
@@ -173,6 +174,7 @@ export default function OrganizationPage() {
           [
             { key: 'members', label: 'Members' },
             { key: 'settings', label: 'Settings' },
+            { key: 'rules', label: 'Booking rules' },
           ] as { key: Tab; label: string }[]
         ).map((t) => (
           <button
@@ -288,6 +290,8 @@ export default function OrganizationPage() {
           )}
         </>
       )}
+
+      {tab === 'rules' && <BookingRulesPanel />}
 
       {tab === 'settings' && (
         <>

@@ -168,6 +168,61 @@ export default function NewRequestPage() {
   }, [suggestionsQuery.data]);
   const contractedSupplier = suggestionsQuery.data?.contractedSupplier ?? null;
 
+  // Commodity group (spec 003): the organization's booking rules decide first,
+  // otherwise the system proposes a group. Requesters can't book a rule-covered
+  // request elsewhere; buyers/admins can, with a reason.
+  const { data: myOrg } = useQuery({
+    queryKey: ['organization', 'me'],
+    queryFn: () => api.organizations.getMine(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const isPrivileged = myOrg?.role === 'buyer' || myOrg?.role === 'admin';
+  const classificationInput = useMemo(
+    () =>
+      orderLines
+        .filter((line) => line.positionDescription.trim())
+        .map((line) => ({
+          description: line.positionDescription.trim(),
+          quantity: line.amount,
+          unitPrice: line.unitPrice,
+          totalPrice: line.totalPrice,
+        })),
+    [orderLines]
+  );
+  const debouncedClassification = useDebounced(classificationInput, 500);
+  const classificationQuery = useQuery({
+    queryKey: ['classification', debouncedClassification],
+    queryFn: () => api.classification.classify(debouncedClassification),
+    enabled: debouncedClassification.length > 0,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const classified = classificationQuery.data;
+  const appliedRule = classified?.rule ?? null;
+  // The group was picked by hand (or a hint accepted): don't replace it with a proposal.
+  const [groupTouched, setGroupTouched] = useState(false);
+  const [acceptedRuleId, setAcceptedRuleId] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
+
+  useEffect(() => {
+    if (!classified) return;
+    if (classified.rule) {
+      // A rule always wins — except a buyer/admin who deliberately chose another group.
+      if (!(isPrivileged && groupTouched)) setCommodityGroupId(classified.rule.targetGroupId);
+    } else if (classified.commodityGroupId && !groupTouched) {
+      setCommodityGroupId(classified.commodityGroupId);
+    }
+  }, [classified, isPrivileged, groupTouched]);
+
+  const groupLocked = !!appliedRule && !isPrivileged;
+  const overridingRule =
+    !!appliedRule && isPrivileged && commodityGroupId !== null && commodityGroupId !== appliedRule.targetGroupId;
+  const acceptHint = (hint: api.RuleHint) => {
+    setCommodityGroupId(hint.targetGroupId);
+    setAcceptedRuleId(hint.ruleId);
+    setGroupTouched(true);
+  };
+
   // PDF parsing mutation
   const parsePDFMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -400,6 +455,14 @@ export default function NewRequestPage() {
         vendorName,
         vatId,
         commodityGroupId: commodityGroupId,
+        commoditySource: groupTouched ? 'manual' : 'system',
+        bookingRuleId:
+          acceptedRuleId && classified?.hints.some(
+            (h) => h.ruleId === acceptedRuleId && h.targetGroupId === commodityGroupId
+          )
+            ? acceptedRuleId
+            : null,
+        overrideReason: overridingRule ? overrideReason.trim() : null,
         totalCost,
         department,
         orderLines: orderLines.map((line) => ({
@@ -621,9 +684,14 @@ export default function NewRequestPage() {
             </label>
             <select
               value={commodityGroupId || ''}
-              onChange={(e) => setCommodityGroupId(Number(e.target.value))}
+              onChange={(e) => {
+                setCommodityGroupId(Number(e.target.value));
+                setGroupTouched(true);
+                setAcceptedRuleId(null);
+              }}
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-accent-deep/60 focus:border-accent-deep/40"
+              disabled={groupLocked}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-900 focus:ring-2 focus:ring-accent-deep/60 focus:border-accent-deep/40 disabled:bg-ink-800/[0.03] disabled:text-ink/70"
             >
               <option value="">
                 {commodityGroups ? 'Select a commodity group' : 'Loading...'}
@@ -634,6 +702,53 @@ export default function NewRequestPage() {
                 </option>
               ))}
             </select>
+            {appliedRule && (
+              <p className="mt-2 text-sm text-accent-deep">
+                🔒 {appliedRule.explanation}
+                {classified?.decidingLine && orderLines.length > 1 && (
+                  <> Decided by the highest-value line: “{classified.decidingLine.description}”.</>
+                )}
+                {groupLocked && ' Only a buyer or admin can book it elsewhere.'}
+              </p>
+            )}
+            {classified?.splitAdvice && (
+              <p className="mt-1 text-sm text-amber-800">
+                This request contains items covered by different booking rules. A request has one
+                commodity group — split it if the items must be booked separately.
+              </p>
+            )}
+            {!appliedRule && classified?.source === 'system' && !groupTouched && (
+              <p className="mt-2 text-xs text-ink/50">Proposed from the order lines — change it if needed.</p>
+            )}
+            {!appliedRule &&
+              (classified?.hints || [])
+                .filter((hint) => hint.targetGroupId !== commodityGroupId)
+                .map((hint) => (
+                  <div
+                    key={`${hint.ruleId}-${hint.lineIndex}`}
+                    className="mt-2 flex flex-wrap items-center gap-2 text-sm text-amber-800"
+                  >
+                    <span>{hint.message}</span>
+                    <button
+                      type="button"
+                      onClick={() => acceptHint(hint)}
+                      className="rounded-full bg-ink px-3 py-1 text-xs font-medium text-white hover:bg-ink-700"
+                    >
+                      Apply rule
+                    </button>
+                  </div>
+                ))}
+            {overridingRule && (
+              <div className="mt-3">
+                <Input
+                  label={`Reason for overriding booking rule '${appliedRule?.name}' *`}
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  required
+                  placeholder="Why this request is booked under a different group"
+                />
+              </div>
+            )}
           </div>
         </div>
 

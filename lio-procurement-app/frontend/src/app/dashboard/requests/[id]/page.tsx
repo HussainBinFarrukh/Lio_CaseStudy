@@ -36,6 +36,7 @@ export default function RequestDetailPage() {
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
 
   // Edit form state
   const [form, setForm] = useState({
@@ -142,6 +143,7 @@ export default function RequestDetailPage() {
         vendorName: form.vendorName,
         vatId: form.vatId,
         commodityGroupId: form.commodityGroupId || 0,
+        overrideReason: needsOverrideReason ? overrideReason.trim() : null,
         totalCost: form.totalCost,
         department: form.department,
         orderLines: (request.order_lines || []).map((l) => ({
@@ -187,6 +189,13 @@ export default function RequestDetailPage() {
   }
 
   const canApprove = (role === 'buyer' || role === 'admin') && request.approval_status === 'pending';
+  // Booking rules (spec 003): requesters can't move a rule-booked request; buyers
+  // and admins can, with a reason.
+  const isPrivileged = role === 'buyer' || role === 'admin';
+  const ruleBooked = request.commodity_source === 'rule' && !!request.booking_rule_name;
+  const ruleLocked = ruleBooked && !isPrivileged;
+  const needsOverrideReason =
+    ruleBooked && isPrivileged && form.commodityGroupId !== request.commodity_group_id;
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -261,6 +270,7 @@ export default function RequestDetailPage() {
               />
               <Field label="Total Cost" value={usd(request.total_cost)} />
             </dl>
+            <CommoditySourceNote request={request} />
           </div>
 
           {hasQuoteDetails(request) && (
@@ -376,14 +386,28 @@ export default function RequestDetailPage() {
                 <select
                   value={form.commodityGroupId || ''}
                   onChange={(e) => setForm({ ...form, commodityGroupId: Number(e.target.value) })}
-                  className="w-full h-11 px-3.5 border border-line rounded-xl text-sm text-ink bg-white focus:outline-none focus:ring-2 focus:ring-accent-deep/60"
+                  disabled={ruleLocked}
+                  className="w-full h-11 px-3.5 border border-line rounded-xl text-sm text-ink bg-white focus:outline-none focus:ring-2 focus:ring-accent-deep/60 disabled:bg-ink-800/[0.03]"
                 >
                   <option value="">Select a commodity group</option>
                   {commodityGroups?.map((g) => (
                     <option key={g.id} value={g.id}>{g.id} - {g.category} - {g.name}</option>
                   ))}
                 </select>
+                {ruleLocked && (
+                  <p className="mt-1.5 text-xs text-accent-deep">
+                    🔒 Set by booking rule &lsquo;{request.booking_rule_name}&rsquo;. Only a buyer or
+                    admin can book it elsewhere.
+                  </p>
+                )}
               </div>
+              {needsOverrideReason && (
+                <Input
+                  label={`Reason for overriding booking rule '${request.booking_rule_name}' *`}
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                />
+              )}
               <Input label="Total Cost ($) *" type="number" step="0.01" value={form.totalCost}
                 onChange={(e) => setForm({ ...form, totalCost: parseFloat(e.target.value) || 0 })} />
               <p className="text-xs text-ink/45">Order lines are edited from the request creation flow.</p>
@@ -402,6 +426,30 @@ export default function RequestDetailPage() {
 }
 
 const optionalUsd = (n: number | null) => (n === null ? '—' : usd(n));
+
+// How the commodity group was decided (spec 003).
+function CommoditySourceNote({ request }: { request: ProcurementRequestWithDetails }) {
+  if (request.commodity_source === 'rule' && request.booking_rule_name) {
+    return (
+      <p className="mt-4 text-xs text-accent-deep">
+        Booked by rule &lsquo;{request.booking_rule_name}&rsquo;
+        {request.booking_rule_line ? ` (line: “${request.booking_rule_line}”)` : ''}.
+      </p>
+    );
+  }
+  if (request.commodity_source === 'override') {
+    return (
+      <p className="mt-4 text-xs text-amber-800">
+        Booking rule &lsquo;{request.booking_rule_name}&rsquo; overridden by a buyer/admin. Reason:{' '}
+        {request.override_reason}
+      </p>
+    );
+  }
+  if (request.commodity_source === 'system') {
+    return <p className="mt-4 text-xs text-ink/45">Commodity group proposed by the system.</p>;
+  }
+  return null;
+}
 
 // Buyer view of a line's catalog status (spec 002, US4): agreement used, or a
 // cheaper agreement that wasn't.

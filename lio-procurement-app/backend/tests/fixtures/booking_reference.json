@@ -1,0 +1,25 @@
+{
+  "_comment": "Spec 003 Appendix A reference scenarios. acme_rule: rule name expected to decide (null = no rule); acme_group: expected group when a rule decides. Used by tests and scripts/eval_classification.py.",
+  "scenarios": [
+    {"id": "R1", "lines": [{"description": "Cable ties nylon 8 in, black, pack of 100", "quantity": 20, "unitPrice": 8.5, "totalPrice": 170.0}], "acme_rule": "Cable ties", "acme_group": 11},
+    {"id": "R2", "lines": [{"description": "Toner cartridge black, high-yield, HP 59A", "quantity": 4, "unitPrice": 120.0, "totalPrice": 480.0}], "acme_rule": "Printer toner", "acme_group": 29},
+    {"id": "R3", "lines": [{"description": "Project management tool subscription, monthly, per user", "quantity": 5, "unitPrice": 12.0, "totalPrice": 60.0}], "acme_rule": "Small software subscriptions", "acme_group": 15},
+    {"id": "R4", "lines": [{"description": "ERP enterprise license, annual, 500 seats", "quantity": 1, "unitPrice": 85000.0, "totalPrice": 85000.0}], "acme_rule": null, "acme_group": null},
+    {"id": "R5", "lines": [{"description": "Patch cable Cat 6, 3 ft, pack of 10", "quantity": 5, "unitPrice": 27.99, "totalPrice": 139.95}], "acme_rule": null, "acme_group": null},
+    {"id": "R6", "lines": [{"description": "Charging cable J1772, 11.5 kW, 16 ft", "quantity": 1, "unitPrice": 189.0, "totalPrice": 189.0}], "acme_rule": null, "acme_group": null},
+    {"id": "R7", "lines": [{"description": "Copy paper letter size, 20 lb, case", "quantity": 3, "unitPrice": 49.0, "totalPrice": 147.0}], "acme_rule": null, "acme_group": null},
+    {"id": "R8", "lines": [{"description": "Laser printer, A4, network", "quantity": 1, "unitPrice": 399.0, "totalPrice": 399.0}], "acme_rule": null, "acme_group": null},
+    {"id": "R9", "lines": [{"description": "Research license simulation software, perpetual", "quantity": 1, "unitPrice": 1877.0, "totalPrice": 1877.0}], "acme_rule": null, "acme_group": null},
+    {"id": "R10", "lines": [{"description": "Moss Art Panel, Mixed Moss 63 x 31.5 in", "quantity": 1, "unitPrice": 715.26, "totalPrice": 715.26}, {"description": "Logo integration \"asklio\" horizontal", "quantity": 1, "unitPrice": 622.0, "totalPrice": 622.0}], "acme_rule": null, "acme_group": null},
+    {"id": "R11", "lines": [{"description": "Toner cartridge black", "quantity": 2, "unitPrice": 120.0, "totalPrice": 240.0}, {"description": "Copy paper letter size, case", "quantity": 2, "unitPrice": 49.0, "totalPrice": 98.0}], "acme_rule": "Printer toner", "acme_group": 29, "deciding_line": 0},
+    {"id": "R12", "lines": [{"description": "Cable ties nylon 8 in", "quantity": 20, "unitPrice": 8.5, "totalPrice": 170.0}, {"description": "Toner cartridge black", "quantity": 4, "unitPrice": 120.0, "totalPrice": 480.0}], "acme_rule": "Printer toner", "acme_group": 29, "deciding_line": 1, "split_advice": true},
+    {"id": "R13", "lines": [{"description": "Team chat subscription, annual", "quantity": 1, "unitPrice": 1999.99, "totalPrice": 1999.99}], "acme_rule": "Small software subscriptions", "acme_group": 15},
+    {"id": "R14", "lines": [{"description": "Team chat subscription, annual", "quantity": 1, "unitPrice": 2000.0, "totalPrice": 2000.0}], "acme_rule": null, "acme_group": null}
+  ],
+  "variants": {
+    "Cable ties": ["zip ties 12 in", "tie wraps assorted", "cable tie mounts adhesive", "releasable cable ties", "Kabelbinder 200 mm"],
+    "Printer toner": ["laser toner HP 26X", "toner kit", "drum & toner kit Brother", "TN-2420 high yield"],
+    "Small software subscriptions": ["SaaS plan, 3 seats", "CRM per-seat license, annual", "Design tool monthly plan"]
+  },
+  "never_rules": ["Patch cable Cat 6", "Network cable 10 ft", "Charging cable J1772", "Copy paper letter size", "Printer paper A4", "Laser printer, A4", "3D printer filament PLA", "Ink cartridge HP 63 black", "ERP implementation services", "Simulation software, perpetual license"]
+}

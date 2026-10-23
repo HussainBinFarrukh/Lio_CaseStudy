@@ -77,7 +77,6 @@ class LlmQuote(BaseModel):
     tax: float | None
     fees: float | None
     grand_total: float | None
-    commodity_group_id: int | None
     absent_fields: list[AbsentField]
 
     @field_validator("net_total", "shipping", "tax", "fees", "grand_total", mode="before")

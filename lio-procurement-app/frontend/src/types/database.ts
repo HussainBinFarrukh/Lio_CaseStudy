@@ -72,6 +72,12 @@ export type ProcurementRequest = {
   quote_valid_until: string | null;
   /** Saving available from catalog alternatives that were not used. */
   potential_saving_total: number | null;
+  /** How the commodity group was decided (booking rules, spec 003). */
+  commodity_source: 'rule' | 'system' | 'manual' | 'override' | null;
+  booking_rule_id: string | null;
+  booking_rule_name: string | null;
+  booking_rule_line: string | null;
+  override_reason: string | null;
   created_at: string;
   updated_at: string;
 };

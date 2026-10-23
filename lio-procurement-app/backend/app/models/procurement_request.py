@@ -30,6 +30,10 @@ class ProcurementRequest(Base, TimestampMixin):
             "approval_status IN ('pending', 'approved', 'rejected')",
             name="ck_procurement_request_approval_status",
         ),
+        CheckConstraint(
+            "commodity_source IN ('rule', 'system', 'manual', 'override')",
+            name="ck_procurement_request_commodity_source",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -73,6 +77,16 @@ class ProcurementRequest(Base, TimestampMixin):
     quote_number: Mapped[str | None] = mapped_column(Text, nullable=True)
     quote_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     quote_valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # How the commodity group was decided (migration 0009, spec 003): a booking
+    # rule, the system's classification, the requester, or a buyer/admin override.
+    commodity_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    booking_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("booking_rules.id", ondelete="SET NULL"), nullable=True
+    )
+    booking_rule_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    booking_rule_line: Mapped[str | None] = mapped_column(Text, nullable=True)
+    override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Multi-tenancy (added in migration 003, nullable for backward compatibility)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(

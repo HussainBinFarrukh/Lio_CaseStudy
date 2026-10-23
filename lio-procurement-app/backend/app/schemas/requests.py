@@ -54,7 +54,20 @@ class QuoteDetailsIn(BaseModel):
 QUOTE_DETAIL_FIELDS = tuple(QuoteDetailsIn.model_fields)
 
 
-class RequestCreate(QuoteDetailsIn):
+class ClassificationChoiceIn(BaseModel):
+    """How the client arrived at the commodity group (spec 003)."""
+
+    # Whether the requester kept the system's proposal or picked a group.
+    commodity_source: Literal["system", "manual"] = Field(
+        default="manual", alias="commoditySource"
+    )
+    # A booking-rule hint the requester accepted (its target must be the group).
+    booking_rule_id: uuid.UUID | None = Field(default=None, alias="bookingRuleId")
+    # Required for buyers/admins booking a rule-covered request elsewhere.
+    override_reason: str | None = Field(default=None, max_length=500, alias="overrideReason")
+
+
+class RequestCreate(QuoteDetailsIn, ClassificationChoiceIn):
     requestor_name: str = Field(alias="requestorName")
     title: str = Field(alias="titleShortDescription")
     vendor_name: str = Field(alias="vendorName")
@@ -65,7 +78,7 @@ class RequestCreate(QuoteDetailsIn):
     order_lines: list[OrderLineIn] = Field(alias="orderLines", min_length=1)
 
 
-class RequestUpdate(QuoteDetailsIn):
+class RequestUpdate(QuoteDetailsIn, ClassificationChoiceIn):
     requestor_name: str = Field(alias="requestorName")
     title: str
     vendor_name: str = Field(alias="vendorName")
@@ -162,6 +175,12 @@ class RequestOut(BaseModel):
     quote_number: str | None
     quote_date: date | None
     quote_valid_until: date | None
+    # How the commodity group was decided (spec 003).
+    commodity_source: Literal["rule", "system", "manual", "override"] | None = None
+    booking_rule_id: uuid.UUID | None = None
+    booking_rule_name: str | None = None
+    booking_rule_line: str | None = None
+    override_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     order_lines: list[OrderLineOut]

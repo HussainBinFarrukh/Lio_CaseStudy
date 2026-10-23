@@ -7,11 +7,11 @@ from collections.abc import Sequence
 import openai
 from openai import OpenAI
 from pydantic import ValidationError
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import CommodityGroup
+from app.schemas.booking_rules import ClassificationLineIn
 from app.schemas.extraction import (
     ExtractedVendorData,
     ExtractionErrorCode,
@@ -19,7 +19,7 @@ from app.schemas.extraction import (
     LlmQuote,
     QuoteTotals,
 )
-from app.services import quote_rules
+from app.services import classification, quote_rules
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ SYSTEM_PROMPT = (
 )
 
 
-def _build_prompt(pdf_text: str, commodity_groups_list: str, buyer_names: Sequence[str]) -> str:
+def _build_prompt(pdf_text: str, buyer_names: Sequence[str]) -> str:
     buyers = "\n".join(f"- {name}" for name in buyer_names) or "- (unknown)"
     return f"""Extract the vendor quote below. The text was read from a PDF in layout order;
 " | " separates columns that were printed side by side on the same line.
@@ -102,10 +102,6 @@ QUOTE REFERENCE: quote_number as printed; quote_date and valid_until as YYYY-MM-
 printed as dates (do not compute a date from "valid for four weeks").
 
 TITLE: 2-5 words describing the main items being purchased.
-
-COMMODITY GROUP: the single most appropriate id from this list (ID | Category | Name), or null
-if genuinely uncertain:
-{commodity_groups_list}
 
 Document text:
 {pdf_text}"""
@@ -171,7 +167,7 @@ def build_extraction(
     quote: LlmQuote,
     *,
     buyer_names: Sequence[str],
-    commodity_groups: dict[int, CommodityGroup],
+    commodity_group: CommodityGroup | None = None,
     department: str = "",
 ) -> tuple[ExtractedVendorData, list[str]]:
     """Apply the deterministic rules to a parsed LLM quote.
@@ -193,11 +189,8 @@ def build_extraction(
         grand_total=quote.grand_total,
     )
 
-    commodity_group_id = quote.commodity_group_id
-    if commodity_group_id is not None and commodity_group_id not in commodity_groups:
-        logger.warning("Invalid commodity group ID returned: %s", commodity_group_id)
-        commodity_group_id = None
-    group = commodity_groups.get(commodity_group_id) if commodity_group_id else None
+    # Decided by the separate classification stage (booking rules, then system).
+    commodity_group_id = commodity_group.id if commodity_group else None
 
     title = (quote.title or "").strip()
     quote_number = (quote.quote_number or "").strip() or None
@@ -231,12 +224,41 @@ def build_extraction(
         totals=totals,
         total_cost=quote_rules.compute_total_cost(lines, totals),
         commodity_group_id=commodity_group_id,
-        commodity_group_name=group.name if group else None,
+        commodity_group_name=commodity_group.name if commodity_group else None,
         excluded_positions=excluded,
         reconciliation=quote_rules.reconcile(lines, totals),
         field_status=statuses,
     )
     return data, quote_rules.missing_field_labels(statuses)
+
+
+def _classify(
+    db: Session, organization_id: uuid.UUID | None, quote: LlmQuote
+) -> CommodityGroup | None:
+    """Commodity group for the extracted lines: booking rules first, then the system.
+
+    Choosing among 2,000 groups inside the extraction call returned no group at
+    all, so classification is its own focused step (spec 003).
+    """
+    if organization_id is None:
+        return None
+    lines, _excluded = quote_rules.classify_positions(quote.positions)
+    if not lines:
+        return None
+    result = classification.classify(
+        db,
+        organization_id,
+        [
+            ClassificationLineIn(
+                description=line.position_description,
+                quantity=line.amount,
+                unit_price=line.unit_price,
+                total_price=line.total_price,
+            )
+            for line in lines
+        ],
+    )
+    return db.get(CommodityGroup, result.commodity_group_id) if result.commodity_group_id else None
 
 
 def extract_vendor_data(
@@ -248,7 +270,7 @@ def extract_vendor_data(
     organization_id: uuid.UUID | None = None,
     client: OpenAI | None = None,
 ) -> ExtractionResponse:
-    """Extract vendor data and classify the commodity group in one AI call.
+    """Extract vendor data, then classify the commodity group from the extracted lines.
 
     Never raises for extraction problems: failures are returned in the envelope
     with a plain-language message so the UI can always continue.
@@ -278,19 +300,9 @@ def extract_vendor_data(
     if client is None and not settings.openai_api_key:
         return finish(_failure(extraction_id, "not_configured"))
 
-    commodity_groups = {
-        g.id: g for g in db.scalars(select(CommodityGroup).order_by(CommodityGroup.id))
-    }
-    # Give the model the full commodity catalog so it has complete context to
-    # pick the most accurate match in a single pass.
-    commodity_groups_list = "\n".join(
-        f"{g.id} | {g.category} | {g.name}" for g in commodity_groups.values()
-    )
-
     try:
         quote, error_code, model_version = _call_model(
-            client or _make_client(),
-            _build_prompt(pdf_text, commodity_groups_list, buyer_names),
+            client or _make_client(), _build_prompt(pdf_text, buyer_names)
         )
     except (openai.OpenAIError, ValidationError) as exc:
         logger.exception("Extraction %s failed", extraction_id)
@@ -302,7 +314,7 @@ def extract_vendor_data(
     data, missing = build_extraction(
         quote,
         buyer_names=buyer_names,
-        commodity_groups=commodity_groups,
+        commodity_group=_classify(db, organization_id, quote),
         department=department,
     )
     return finish(

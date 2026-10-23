@@ -19,6 +19,7 @@ from app.data.suppliers import SUPPLIERS
 from app.db.session import SessionLocal
 from app.models import (
     Article,
+    BookingRule,
     CommodityGroup,
     Organization,
     OrganizationMember,
@@ -55,6 +56,45 @@ ORG_ACCOUNTS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
 # ``buyer_aliases``). Acme's reference quotes are addressed to these names.
 ORG_BUYER_ALIASES: dict[str, list[str]] = {
     "acme": ["ACME Corp", "Lio Technologies, Inc.", "askLio"],
+}
+
+# Organization booking rules (spec 003): accounting quirks that override the
+# commodity classification. Acme's three non-negotiable rules.
+ORG_BOOKING_RULES: dict[str, list[dict]] = {
+    "acme": [
+        {
+            "name": "Cable ties",
+            "description": "Cable ties of any kind are booked under Electrical Engineering.",
+            "include_terms": ["cable tie*", "zip tie*", "tie wrap*", "kabelbinder"],
+            "exclude_terms": [],
+            "max_annual_amount": None,
+            "target_commodity_group_id": 11,  # Facility Management / Electrical Engineering
+        },
+        {
+            "name": "Printer toner",
+            "description": "Printer toner (cartridges, kits, drum & toner) is booked under IT Hardware.",
+            "include_terms": ["toner*", "tn-*"],
+            "exclude_terms": ["ink", "paper"],
+            "max_annual_amount": None,
+            "target_commodity_group_id": 29,  # Information Technology / Hardware ("IT Hardware")
+        },
+        {
+            "name": "Small software subscriptions",
+            "description": (
+                "Recurring software subscriptions (SaaS, monthly or annual plans, per-seat "
+                "licenses) under $2,000 a year are booked as office supplies."
+            ),
+            "include_terms": [
+                "subscription*", "saas", "per-seat licen*", "per seat licen*", "per user",
+                "per-user", "monthly plan", "annual plan",
+            ],
+            "exclude_terms": ["perpetual", "implementation"],
+            "max_annual_amount": 2000.0,
+            # "Office Supplies" doesn't exist; Facility Management / Office Equipment
+            # is the agreed stand-in (spec 003, FR-008).
+            "target_commodity_group_id": 15,
+        },
+    ],
 }
 
 
@@ -185,6 +225,25 @@ def seed_buyer_aliases(db: Session) -> int:
     return updated
 
 
+def seed_booking_rules(db: Session) -> int:
+    """Insert missing default booking rules (keyed by organization and name).
+
+    Never overwrites a rule an admin has edited, and doesn't recreate one an admin
+    deleted after it was seeded once (tracked by any existing rule of that org).
+    """
+    created = 0
+    for slug, rules in ORG_BOOKING_RULES.items():
+        org = db.scalar(select(Organization).where(Organization.slug == slug))
+        if org is None:
+            continue
+        if db.scalar(select(BookingRule.id).where(BookingRule.organization_id == org.id).limit(1)):
+            continue  # the organization already manages its rules
+        for rule in rules:
+            db.add(BookingRule(organization_id=org.id, **rule))
+            created += 1
+    return created
+
+
 def seed(db: Session) -> dict[str, int]:
     """Seed everything. Returns counts of newly created rows per kind.
 
@@ -204,6 +263,7 @@ def seed(db: Session) -> dict[str, int]:
         "organizations": orgs_created,
         "users": users_created,
         "buyer_aliases": seed_buyer_aliases(db),
+        "booking_rules": seed_booking_rules(db),
     }
     db.commit()
     return counts

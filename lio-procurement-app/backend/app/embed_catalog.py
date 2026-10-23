@@ -1,4 +1,4 @@
-"""Embed catalog articles for semantic suggestions (spec 002).
+"""Embed catalog articles (spec 002) and base commodity groups (spec 003).
 
 Idempotent: only articles without a vector for the configured embedding model
 are embedded (identical descriptions once). Safe to run on every startup; it
@@ -16,7 +16,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Organization
-from app.services import catalog_search
+from app.services import catalog_search, classification
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,18 @@ def main() -> None:
                 db.rollback()
                 logger.warning("Catalog embedding failed; will retry on first lookup")
                 return
-    logger.info("Catalog embedded: +%d articles (%s)", total, catalog_search.model_tag())
+        try:
+            groups = classification.ensure_group_embeddings(db, catalog_search.openai_embedder)
+        except openai.OpenAIError:
+            db.rollback()
+            logger.warning("Commodity group embedding failed; will retry on first lookup")
+            groups = 0
+    logger.info(
+        "Catalog embedded: +%d articles, +%d commodity groups (%s)",
+        total,
+        groups,
+        catalog_search.model_tag(),
+    )
 
 
 if __name__ == "__main__":

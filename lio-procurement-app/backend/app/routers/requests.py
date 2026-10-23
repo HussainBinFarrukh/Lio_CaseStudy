@@ -11,6 +11,7 @@ from app.core.deps import get_current_membership, require_buyer_or_admin
 from app.db.session import get_db
 from app.models import (
     Article,
+    BookingRule,
     CommodityGroup,
     OrderLine,
     Organization,
@@ -30,7 +31,8 @@ from app.schemas.requests import (
     RequestUpdate,
     StatusUpdate,
 )
-from app.services import catalog_matching, catalog_search
+from app.services import booking_rules as rules_engine
+from app.services import catalog_matching, catalog_search, classification
 from app.services.pdf import is_pdf_upload
 
 logger = logging.getLogger(__name__)
@@ -305,6 +307,92 @@ def _changed_fields(request: ProcurementRequest, payload: RequestUpdate) -> list
     return changed
 
 
+def _apply_booking_rules(
+    db: Session,
+    membership: OrganizationMember,
+    payload: RequestCreate | RequestUpdate,
+    request: ProcurementRequest,
+) -> str | None:
+    """Enforce the organization's booking rules and record how the group was decided.
+
+    Spec 003: a rule-covered request must use the rule's group. Requesters are
+    rejected otherwise; buyers/admins may override with a reason. Returns an
+    activity summary when an override was recorded.
+    """
+    rules = classification.load_rules(db, membership.organization_id)
+    lines = [
+        rules_engine.Line(
+            description=line.position_description,
+            quantity=line.amount,
+            unit_price=line.unit_price,
+            total_price=line.total_price,
+        )
+        for line in payload.order_lines
+    ]
+    outcome = rules_engine.evaluate(rules, lines)
+    group_id = payload.commodity_group_id
+    deciding = (
+        lines[outcome.deciding_index].description if outcome.deciding_index is not None else None
+    )
+
+    def record(source, rule_id=None, rule_name=None, line=None, reason=None):
+        request.commodity_source = source
+        request.booking_rule_id = rule_id
+        request.booking_rule_name = rule_name
+        request.booking_rule_line = line
+        request.override_reason = reason
+
+    rule = outcome.rule
+    if rule is not None:
+        if group_id == rule.target_group_id:
+            record("rule", rule.id, rule.name, deciding)
+            return None
+        if (
+            request.commodity_source == "override"
+            and request.commodity_group_id == group_id
+            and request.booking_rule_id == rule.id
+        ):
+            return None  # an earlier buyer/admin override stays in place
+        target = db.get(CommodityGroup, rule.target_group_id)
+        target_label = f"{rule.target_group_id} · {target.name if target else ''}".strip()
+        if membership.role not in ("buyer", "admin"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Booking rule '{rule.name}' requires commodity group {target_label}.",
+            )
+        reason = (payload.override_reason or "").strip()
+        if not reason:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"A reason is required to override booking rule '{rule.name}'.",
+            )
+        record("override", rule.id, rule.name, deciding, reason)
+        return (
+            f"Commodity group overridden: booking rule '{rule.name}' requires {target_label}, "
+            f"booked under {group_id}. Reason: {reason}"
+        )
+
+    if payload.booking_rule_id is not None:
+        accepted = db.scalar(
+            select(BookingRule).where(
+                BookingRule.id == payload.booking_rule_id,
+                BookingRule.organization_id == membership.organization_id,
+            )
+        )
+        if accepted is None or accepted.target_commodity_group_id != group_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The accepted booking rule does not match the commodity group.",
+            )
+        record("rule", accepted.id, accepted.name, deciding)
+        return None
+
+    if request.commodity_source is not None and request.commodity_group_id == group_id:
+        return None  # group unchanged on edit: keep how it was decided
+    record(payload.commodity_source)
+    return None
+
+
 @router.get("", response_model=list[RequestOut])
 def list_requests(
     membership: OrganizationMember = Depends(get_current_membership),
@@ -356,6 +444,7 @@ def create_request(
         **{field: getattr(payload, field) for field in QUOTE_DETAIL_FIELDS},
     )
     request.order_lines = _build_order_lines(db, membership.organization_id, payload)
+    override = _apply_booking_rules(db, membership, payload, request)
     db.add(request)
     db.flush()
     linked = sum(1 for line in request.order_lines if line.article_number)
@@ -365,6 +454,8 @@ def create_request(
             f" — {linked} of {len(request.order_lines)} lines use catalog agreements"
         )
     _log_activity(db, request.id, membership.user_id, "created", summary)
+    if override:
+        _log_activity(db, request.id, membership.user_id, "commodity_override", override)
     db.commit()
 
     request = _get_org_request(db, request.id, membership.organization_id)
@@ -383,6 +474,8 @@ def update_request(
     _enforce_required_fields(db, membership.organization_id, payload)
 
     changed = _changed_fields(request, payload)
+    # Rules are checked against the request as it was (an existing override stays).
+    override = _apply_booking_rules(db, membership, payload, request)
 
     request.requestor_name = payload.requestor_name
     request.title = payload.title
@@ -412,6 +505,8 @@ def update_request(
             f"Updated {', '.join(labels)}",
             {"changed_fields": changed},
         )
+    if override:
+        _log_activity(db, request.id, membership.user_id, "commodity_override", override)
     db.commit()
 
     request = _get_org_request(db, request_id, membership.organization_id)

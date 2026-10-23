@@ -115,6 +115,76 @@ export interface SuggestionsResponse {
   lines: LineSuggestions[];
 }
 
+// Commodity classification and booking rules (spec 003).
+export interface ClassificationLineInput {
+  description: string;
+  quantity?: number;
+  unitPrice?: number | null;
+  totalPrice?: number | null;
+}
+
+export interface RuleHint {
+  ruleId: string;
+  ruleName: string;
+  targetGroupId: number;
+  lineIndex: number;
+  message: string;
+}
+
+export interface ClassificationResult {
+  commodityGroupId: number | null;
+  commodityGroupName: string | null;
+  source: 'rule' | 'system' | null;
+  rule: { id: string; name: string; targetGroupId: number; explanation: string } | null;
+  decidingLine: { index: number; description: string } | null;
+  splitAdvice: boolean;
+  hints: RuleHint[];
+}
+
+export interface BookingRule {
+  id: string;
+  name: string;
+  description: string;
+  include_terms: string[];
+  exclude_terms: string[];
+  max_annual_amount: number | null;
+  target_commodity_group_id: number;
+  target_commodity_group_name: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookingRuleInput {
+  name: string;
+  description: string;
+  include_terms: string[];
+  exclude_terms: string[];
+  max_annual_amount: number | null;
+  target_commodity_group_id: number;
+  active: boolean;
+}
+
+export interface BookingRuleEvent {
+  id: string;
+  rule_id: string | null;
+  actor_id: string | null;
+  action: 'created' | 'updated' | 'deleted';
+  summary: string;
+  created_at: string;
+}
+
+export interface MisbookedRequest {
+  request_id: string;
+  title: string;
+  current_group_id: number | null;
+  mandated_group_id: number;
+  rule_id: string;
+  rule_name: string;
+  deciding_line: string;
+  created_at: string;
+}
+
 export interface CatalogUsage {
   from: string;
   to: string;
@@ -138,7 +208,17 @@ export interface QuoteDetailsInput {
   feesAmount?: number | null;
 }
 
-export interface CreateRequestInput extends QuoteDetailsInput {
+/** How the commodity group was chosen (booking rules, spec 003). */
+export interface ClassificationChoiceInput {
+  /** Whether the system's proposal was kept or the requester picked a group. */
+  commoditySource?: 'system' | 'manual';
+  /** A booking-rule hint the requester accepted. */
+  bookingRuleId?: string | null;
+  /** Required for buyers/admins booking a rule-covered request elsewhere. */
+  overrideReason?: string | null;
+}
+
+export interface CreateRequestInput extends QuoteDetailsInput, ClassificationChoiceInput {
   requestorName: string;
   titleShortDescription: string;
   vendorName: string;
@@ -150,7 +230,7 @@ export interface CreateRequestInput extends QuoteDetailsInput {
   orderLines: OrderLineInput[];
 }
 
-export interface UpdateRequestInput extends QuoteDetailsInput {
+export interface UpdateRequestInput extends QuoteDetailsInput, ClassificationChoiceInput {
   requestorName: string;
   title: string;
   vendorName: string;
@@ -453,6 +533,40 @@ export const pdf = {
 export const extraction = {
   extract(text: string): Promise<ExtractionResponse> {
     return apiFetch('/extraction', { body: { text } });
+  },
+};
+
+// ============================================================================
+// Commodity classification and booking rules
+// ============================================================================
+
+export const classification = {
+  classify(lines: ClassificationLineInput[]): Promise<ClassificationResult> {
+    return apiFetch('/classification', { body: { lines } });
+  },
+};
+
+export const bookingRules = {
+  list(): Promise<BookingRule[]> {
+    return apiFetch('/booking-rules');
+  },
+  create(input: BookingRuleInput): Promise<{ rule: BookingRule; warnings: string[] }> {
+    return apiFetch('/booking-rules', { body: input });
+  },
+  update(id: string, input: BookingRuleInput): Promise<{ rule: BookingRule; warnings: string[] }> {
+    return apiFetch(`/booking-rules/${id}`, { method: 'PUT', body: input });
+  },
+  remove(id: string): Promise<void> {
+    return apiFetch(`/booking-rules/${id}`, { method: 'DELETE' });
+  },
+  events(): Promise<BookingRuleEvent[]> {
+    return apiFetch('/booking-rules/events');
+  },
+  check(): Promise<MisbookedRequest[]> {
+    return apiFetch('/booking-rules/check');
+  },
+  rebook(requestIds: string[]): Promise<{ rebooked: number }> {
+    return apiFetch('/booking-rules/rebook', { body: { requestIds } });
   },
 };
 

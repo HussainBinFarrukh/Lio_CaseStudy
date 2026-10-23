@@ -1003,6 +1003,7 @@ def test_catalog_suggestions_api_and_tenant_isolation():
 
 
 def test_request_catalog_links_snapshot_and_alternatives():
+    # Toner lines use group 29: Acme's booking rule (spec 003) books toner under Hardware.
     from app.models import Article, Organization, Supplier
 
     with TestingSession() as db:
@@ -1032,7 +1033,7 @@ def test_request_catalog_links_snapshot_and_alternatives():
     }
     payload = {
         "requestorName": "R", "titleShortDescription": "Toner", "vendorName": "Montclair Supply Corp.",
-        "vatId": "", "commodityGroupId": 15, "totalCost": 1700.0, "department": "",
+        "vatId": "", "commodityGroupId": 29, "totalCost": 1700.0, "department": "",
         "orderLines": [linked, unlinked],
     }
     r = client.post("/requests", json=payload, headers=_auth(token))
@@ -1088,7 +1089,7 @@ def test_catalog_usage_report_admin_only():
     r = client.post(
         "/requests",
         json={"requestorName": "A", "titleShortDescription": "Usage", "vendorName": "V",
-              "vatId": "", "commodityGroupId": 15, "totalCost": 1700.0, "department": "",
+              "vatId": "", "commodityGroupId": 29, "totalCost": 1700.0, "department": "",
               "orderLines": lines},
         headers=_auth(admin),
     )
@@ -1111,6 +1112,167 @@ def test_catalog_usage_report_admin_only():
         "/catalog/usage?from=2026-10-10&to=2026-10-01", headers=_auth(_signin("admin@acme.com"))
     )
     assert r.status_code == 422
+
+
+def _toner_request(**overrides) -> dict:
+    payload = {
+        "requestorName": "R", "titleShortDescription": "Toner", "vendorName": "Office Depot",
+        "vatId": "", "commodityGroupId": 29, "totalCost": 480.0, "department": "",
+        "orderLines": [
+            {"positionDescription": "Toner cartridge black, high-yield, HP 59A", "unitPrice": 120.0,
+             "amount": 4, "unit": "pieces", "totalPrice": 480.0}
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_classification_api_applies_org_rules_only():
+    lines = {"lines": [{"description": "Cable ties nylon 8 in, black, pack of 100",
+                        "quantity": 20, "unitPrice": 8.5, "totalPrice": 170.0}]}
+    acme = client.post("/classification", json=lines, headers=_auth(_signin("requester@acme.com")))
+    assert acme.status_code == 200, acme.text
+    body = acme.json()
+    assert (body["source"], body["commodityGroupId"], body["rule"]["name"]) == (
+        "rule", 11, "Cable ties"
+    )
+    assert "booking rule" in body["rule"]["explanation"]
+
+    walmart = client.post("/classification", json=lines, headers=_auth(_signin("admin@walmart.com")))
+    assert walmart.json()["rule"] is None and walmart.json()["source"] is None  # no AI in tests
+
+
+def test_requester_cannot_book_rule_covered_request_elsewhere():
+    token = _signin("requester@acme.com")
+    r = client.post("/requests", json=_toner_request(commodityGroupId=204), headers=_auth(token))
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Booking rule 'Printer toner' requires commodity group 29 · Hardware."
+
+    r = client.post("/requests", json=_toner_request(), headers=_auth(token))
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert (created["commodity_source"], created["booking_rule_name"]) == ("rule", "Printer toner")
+    assert created["booking_rule_line"].startswith("Toner cartridge black")
+
+    # Edits are checked the same way (FR-005).
+    edit = dict(_toner_request(), title="Toner", commodityGroupId=15)
+    del edit["titleShortDescription"]
+    r = client.put(f"/requests/{created['id']}", json=edit, headers=_auth(token))
+    assert r.status_code == 422
+
+
+def test_buyer_override_needs_reason_and_is_logged():
+    token = _signin("buyer@acme.com")
+    r = client.post("/requests", json=_toner_request(commodityGroupId=204), headers=_auth(token))
+    assert r.status_code == 422
+    assert "reason is required" in r.json()["detail"]
+
+    r = client.post(
+        "/requests",
+        json=_toner_request(commodityGroupId=204, overrideReason="Toner for the print shop budget"),
+        headers=_auth(token),
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert (created["commodity_source"], created["commodity_group_id"]) == ("override", 204)
+    assert created["override_reason"] == "Toner for the print shop budget"
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(token)).json()
+    assert any(a["action"] == "commodity_override" and "print shop" in a["summary"] for a in activity)
+
+    # A requester editing that request keeps the buyer's override.
+    edit = dict(_toner_request(commodityGroupId=204), title="Toner (print shop)")
+    del edit["titleShortDescription"]
+    r = client.put(
+        f"/requests/{created['id']}", json=edit, headers=_auth(_signin("requester@acme.com"))
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["commodity_source"] == "override"
+
+
+def test_other_orgs_and_unruled_items_are_unaffected():
+    walmart = _signin("admin@walmart.com")
+    r = client.post("/requests", json=_toner_request(commodityGroupId=204), headers=_auth(walmart))
+    assert r.status_code == 201, r.text
+    assert r.json()["commodity_source"] == "manual" and r.json()["booking_rule_name"] is None
+
+    paper = _toner_request(
+        commodityGroupId=201, commoditySource="system",
+        orderLines=[{"positionDescription": "Copy paper letter size", "unitPrice": 49.0,
+                     "amount": 3, "unit": "case", "totalPrice": 147.0}],
+    )
+    r = client.post("/requests", json=paper, headers=_auth(_signin("requester@acme.com")))
+    assert r.status_code == 201 and r.json()["commodity_source"] == "system"
+
+
+def test_booking_rule_management_admin_only_and_audited():
+    admin = _signin("admin@acme.com")
+    rules = client.get("/booking-rules", headers=_auth(admin)).json()
+    assert {r["name"] for r in rules} >= {"Cable ties", "Printer toner", "Small software subscriptions"}
+    assert client.get("/booking-rules", headers=_auth(_signin("buyer@acme.com"))).status_code == 403
+
+    new_rule = {
+        "name": "Label printer tape", "description": "Label tape is office supplies",
+        "include_terms": ["label tape", "label printer tape"], "exclude_terms": [],
+        "target_commodity_group_id": 15,
+    }
+    r = client.post("/booking-rules", json=new_rule, headers=_auth(admin))
+    assert r.status_code == 201, r.text
+    rule_id = r.json()["rule"]["id"]
+    assert r.json()["rule"]["target_commodity_group_name"] == "Office Equipment"
+
+    # The new rule applies to the next request right away (SC-006).
+    lines = {"lines": [{"description": "Label printer tape 12 mm", "totalPrice": 30.0}]}
+    r = client.post("/classification", json=lines, headers=_auth(_signin("requester@acme.com")))
+    assert (r.json()["commodityGroupId"], r.json()["rule"]["name"]) == (15, "Label printer tape")
+
+    assert client.post("/booking-rules", json=new_rule, headers=_auth(admin)).status_code == 409
+    bad = dict(new_rule, name="Bad", target_commodity_group_id=999999)
+    assert client.post("/booking-rules", json=bad, headers=_auth(admin)).status_code == 422
+    overlap = dict(new_rule, name="Toner again", include_terms=["toner*"])
+    r = client.post("/booking-rules", json=overlap, headers=_auth(admin))
+    assert r.status_code == 201 and r.json()["warnings"]
+    client.delete(f"/booking-rules/{r.json()['rule']['id']}", headers=_auth(admin))
+
+    r = client.put(
+        f"/booking-rules/{rule_id}", json=dict(new_rule, active=False), headers=_auth(admin)
+    )
+    assert r.status_code == 200 and r.json()["rule"]["active"] is False
+    events = client.get("/booking-rules/events", headers=_auth(admin)).json()
+    assert {"created", "updated", "deleted"} <= {e["action"] for e in events}
+    assert any("Label printer tape" in e["summary"] for e in events)
+
+    # Other organizations can't see or touch Acme's rules.
+    walmart = _signin("admin@walmart.com")
+    assert client.get("/booking-rules", headers=_auth(walmart)).json() == []
+    assert client.delete(f"/booking-rules/{rule_id}", headers=_auth(walmart)).status_code == 404
+    assert client.delete(f"/booking-rules/{rule_id}", headers=_auth(admin)).status_code == 204
+
+
+def test_check_and_rebook_existing_requests():
+    from app.models import ProcurementRequest
+
+    token = _signin("requester@acme.com")
+    created = client.post("/requests", json=_toner_request(), headers=_auth(token)).json()
+    # Simulate a request booked before the rule existed.
+    with TestingSession() as db:
+        request = db.get(ProcurementRequest, uuid.UUID(created["id"]))
+        request.commodity_group_id, request.commodity_source = 204, "manual"
+        db.commit()
+
+    admin = _signin("admin@acme.com")
+    found = client.get("/booking-rules/check", headers=_auth(admin)).json()
+    mine = [f for f in found if f["request_id"] == created["id"]]
+    assert mine and (mine[0]["current_group_id"], mine[0]["mandated_group_id"]) == (204, 29)
+
+    r = client.post(
+        "/booking-rules/rebook", json={"requestIds": [created["id"]]}, headers=_auth(admin)
+    )
+    assert r.json() == {"rebooked": 1}
+    after = client.get(f"/requests/{created['id']}", headers=_auth(admin)).json()
+    assert (after["commodity_group_id"], after["commodity_source"]) == (29, "rule")
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(admin)).json()
+    assert any(a["action"] == "rebooked" for a in activity)
+    assert client.get("/booking-rules/check", headers=_auth(_signin("buyer@acme.com"))).status_code == 403
 
 
 if __name__ == "__main__":

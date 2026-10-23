@@ -134,8 +134,19 @@ def classify_positions(
     """Split item-table rows into billable order lines and excluded rows."""
     lines: list[OrderLineData] = []
     excluded: list[ExcludedPosition] = []
+    # A heading such as "Alternative: vertical logo" introduces the next priced
+    # row as an alternative even when that row's own "(Alt.)" marker was lost.
+    after_alternative_heading = False
     for position in positions:
         reason = _exclusion_reason(position)
+        if reason is None and after_alternative_heading:
+            reason = "alternative"
+        if reason == "heading":
+            after_alternative_heading = bool(
+                _ALTERNATIVE_TEXT.search(position.description or "")
+            )
+        else:
+            after_alternative_heading = False
         if reason is None:
             lines.append(_to_order_line(position))
         else:

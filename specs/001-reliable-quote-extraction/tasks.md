@@ -149,7 +149,7 @@ start with `quotes/` or `specs/`.
 
 - [X] T045 Run backend suite, ruff on changed files, `tsc --noEmit` + `next build`
 - [X] T046 [P] README: configuration template, eval script, buyer aliases
-- [ ] T047 Run quickstart.md validation — offline steps done (99 tests, tsc, build, Postgres migration); live eval (step 3) and UI walkthrough (step 4) pending an `OPENAI_API_KEY`
+- [ ] T047 Run quickstart.md validation — offline steps done (100 tests, tsc, build, Postgres migration); live eval (step 3) passed 15/15 runs at 100% on every field (gpt-4o-mini, 2026-10-23); manual UI walkthrough (step 4) still pending
 
 ---
 

@@ -61,6 +61,10 @@ class LlmPosition(BaseModel):
 
 class LlmQuote(BaseModel):
     title: str | None
+    # Generated before vendor_name (Structured Outputs keeps field order) so the
+    # model separates the addressee from the issuer before naming the vendor.
+    recipient_name: str | None
+    vendor_evidence: str | None
     vendor_name: str | None
     vendor_tax_id: str | None
     quote_number: str | None

@@ -56,10 +56,17 @@ THE BUYER (the recipient of this quote — "Prepared for", "Bill to", "Ship to",
 {buyers}
 The buyer is NEVER the vendor.
 
-VENDOR
-- vendor_name: the company that ISSUED the quote (letterhead, footer, "Prepared by", sender,
-  email/web domain, terms & conditions). Prefer the legal entity name when printed
-  (e.g. "X Interiors, Inc." over a brand name). If the issuer cannot be identified, null.
+VENDOR (fill these three in order)
+- recipient_name: the company the quote is addressed TO (usually the buyer above).
+- vendor_evidence: the exact printed text where you found the issuer's name (e.g. the
+  footer line, sender email domain or terms & conditions sentence); never the address block
+  of the recipient.
+- vendor_name: the company that ISSUED the quote — never recipient_name. The issuer's name is often only in a logo
+  (not in the text), so look for it in the footer, "Prepared by", the sender's email/web
+  domain, the body text ("your inquiry at X") and the terms & conditions ("The General Terms
+  and Conditions of X apply"). Prefer the legal entity name when printed (e.g. "X Interiors,
+  Inc." over the brand "X"); otherwise use the brand. Return null only if no issuer name or
+  brand appears anywhere.
 - vendor_tax_id: only the value printed next to the ISSUER's EIN / Federal Tax ID / Tax ID /
   TIN label. Never a permit, seller's permit, LLC/registration, routing, account, customer,
   quote or phone number, and never the buyer's tax ID. If two different labelled tax IDs are
@@ -69,7 +76,9 @@ POSITIONS — return EVERY row of the item table, in order, with kind:
 - "item": a position that is part of the quoted total.
 - "alternative": an option/alternative not included in the total ("Alternative", "Alt.",
   "(Alt.)", "Option", "optional", "instead of item …", rows introduced by "Alternative to the
-  preceding item"), or rows whose price is marked as unit price only (e.g. "U.P.").
+  preceding item"), or rows whose price is marked as unit price only (e.g. "U.P."). Markers
+  such as "(Alt.)" may be printed on the line BELOW the item number or description, and a
+  heading like "Alternative: …" makes the following priced row an alternative.
 - "heading": a grouping/heading row with neither quantity nor price.
 - "promotional": upsell/marketing text that is not part of the offer.
 Do not create positions from text outside the item table (page subtotals, "Carried forward",

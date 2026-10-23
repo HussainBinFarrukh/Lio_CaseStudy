@@ -19,7 +19,8 @@ def _position(**overrides) -> LlmPosition:
 
 def _quote(**overrides) -> LlmQuote:
     fields = {
-        "title": "T", "vendor_name": "V", "vendor_tax_id": None, "quote_number": None, "quote_date": None,
+        "title": "T", "recipient_name": None, "vendor_evidence": None, "vendor_name": "V",
+        "vendor_tax_id": None, "quote_number": None, "quote_date": None,
         "valid_until": None, "currency": "USD", "positions": [], "net_total": None, "shipping": None,
         "tax": None, "fees": None, "grand_total": None, "commodity_group_id": None, "absent_fields": [],
     }
@@ -130,6 +131,27 @@ def test_headings_alternatives_and_promotions_are_excluded():
         (None, "promotional"),
     ]
     assert excluded[1].amount == 2090
+
+
+def test_row_after_alternative_heading_is_an_alternative():
+    # Seen live on Greenmantle: the "(Alt.)" marker sits on the line below item 5,
+    # so the model returned it as a plain item after the "Alternative:" heading.
+    lines, excluded = quote_rules.classify_positions(
+        [
+            _position(item_no="1", kind="heading", description="Moss Art Panel 63 x 31.5 in",
+                      quantity=None, unit_price=None, line_total=None),
+            _position(item_no="2", description="Moss Art Panel 63 x 31.5 in", unit_price=715.26,
+                      line_total=715.26),
+            _position(item_no="3", description="Logo horizontal", unit_price=622, line_total=622),
+            _position(item_no="4", kind="heading", description="Alternative: vertical logo",
+                      quantity=None, unit_price=None, line_total=None),
+            _position(item_no="5", description="Logo vertical", unit_price=430, line_total=430),
+        ]
+    )
+    assert [line.total_price for line in lines] == [715.26, 622]
+    assert [(e.item_no, e.reason) for e in excluded] == [
+        ("1", "heading"), ("4", "heading"), ("5", "alternative"),
+    ]
 
 
 def test_free_position_and_missing_quantity_are_kept():

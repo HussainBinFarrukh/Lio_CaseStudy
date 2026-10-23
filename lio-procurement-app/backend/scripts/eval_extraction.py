@@ -55,6 +55,28 @@ def score(data, expected: dict) -> dict[str, bool]:
     }
 
 
+def print_diff(data, expected: dict, wrong: list[str]) -> None:
+    """Show what was extracted for each wrong field (no document text)."""
+    for field in wrong:
+        if field == "lines":
+            print(f"      lines expected {expected['line_totals']}; got:")
+            for line in data.order_lines:
+                print(f"        + {line.total_price:>10.2f}  {line.position_description[:70]}")
+            for row in data.excluded_positions:
+                print(f"        - {row.reason:<11} {row.item_no or '':<6} {row.description[:60]}")
+        else:
+            got = {"vendor": data.vendor_name, "vat_id": data.vat_id,
+                   "net_total": data.totals.net_total, "grand_total": data.total_cost,
+                   "quote_number": data.quote_number, "quote_date": data.quote_date,
+                   "valid_until": data.valid_until}[field]
+            print(f"      {field}: expected {expected[field]!r}; got {got!r} "
+                  f"(status {data.field_status.get(_STATUS_KEY.get(field, field))})")
+
+
+_STATUS_KEY = {"vendor": "vendorName", "vat_id": "vatId", "quote_number": "quoteNumber",
+               "quote_date": "quoteDate", "valid_until": "validUntil"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--quotes", type=Path, default=BACKEND_DIR.parents[1] / "quotes")
@@ -62,6 +84,12 @@ def main() -> int:
     parser.add_argument("--min-accuracy", type=float, default=1.0)
     parser.add_argument(
         "--fixture", type=Path, default=BACKEND_DIR / "tests/fixtures/reference_quotes.json"
+    )
+    parser.add_argument(
+        "--only", nargs="+", metavar="FILE", help="evaluate only these quote files"
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="print extracted vs. expected for wrong fields"
     )
     args = parser.parse_args()
 
@@ -82,6 +110,8 @@ def main() -> int:
     hits: dict[str, int] = defaultdict(int)
     total_runs = hard_failures = 0
     for filename, expected in reference["quotes"].items():
+        if args.only and filename not in args.only:
+            continue
         text = extract_text((args.quotes / filename).read_bytes())
         for run in range(1, args.runs + 1):
             total_runs += 1
@@ -97,6 +127,8 @@ def main() -> int:
             wrong = [f for f, ok in result.items() if not ok]
             print(f"{'ok  ' if not wrong else 'DIFF'}  {filename} run {run}"
                   + (f": {', '.join(wrong)}" if wrong else ""))
+            if args.verbose and wrong:
+                print_diff(response.data, expected, wrong)
 
     print(f"\nRuns: {total_runs}  hard failures: {hard_failures}")
     print(f"{'field':<14}accuracy")

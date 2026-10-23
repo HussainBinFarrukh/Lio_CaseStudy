@@ -2,13 +2,16 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 MemberRole = Literal["admin", "buyer", "requester"]
 
 # Request fields an organization may optionally mark as required. (The other
 # request fields are always required by the app.)
 ConfigurableRequiredField = Literal["vat_id", "department"]
+
+MAX_BUYER_ALIASES = 20
+MAX_BUYER_ALIAS_LENGTH = 120
 
 
 class OrganizationSettings(BaseModel):
@@ -21,6 +24,27 @@ class OrganizationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     required_fields: list[ConfigurableRequiredField] = Field(default_factory=list)
+    # Other names the organization appears under on vendor quotes (e.g. a legal
+    # entity or brand). Extraction never returns any of them as the vendor.
+    buyer_aliases: list[str] = Field(default_factory=list, max_length=MAX_BUYER_ALIASES)
+
+    @field_validator("buyer_aliases")
+    @classmethod
+    def clean_buyer_aliases(cls, aliases: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for alias in aliases:
+            alias = alias.strip()
+            if not alias:
+                raise ValueError("Company names must not be empty.")
+            if len(alias) > MAX_BUYER_ALIAS_LENGTH:
+                raise ValueError(
+                    f"Company names must be at most {MAX_BUYER_ALIAS_LENGTH} characters."
+                )
+            if alias.casefold() not in seen:
+                seen.add(alias.casefold())
+                cleaned.append(alias)
+        return cleaned
 
 
 class OrganizationCreate(BaseModel):

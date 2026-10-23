@@ -47,6 +47,8 @@ export type ConfigurableRequiredField = 'vat_id' | 'department';
 
 export interface OrganizationSettings {
   required_fields: ConfigurableRequiredField[];
+  /** Other names the organization appears under on vendor quotes. */
+  buyer_aliases: string[];
 }
 
 export interface MembersResponse {
@@ -59,21 +61,36 @@ export interface OrderLineInput {
   unitPrice: number;
   amount: number;
   unit: string;
+  /** 0–100; the line total is net of it. */
+  discountPercent?: number;
   totalPrice: number;
 }
 
-export interface CreateRequestInput {
+/** Vendor-quote details captured at extraction (all optional). */
+export interface QuoteDetailsInput {
+  quoteNumber?: string | null;
+  quoteDate?: string | null; // YYYY-MM-DD
+  validUntil?: string | null; // YYYY-MM-DD
+  currency?: string | null;
+  netTotal?: number | null;
+  shippingAmount?: number | null;
+  taxAmount?: number | null;
+  feesAmount?: number | null;
+}
+
+export interface CreateRequestInput extends QuoteDetailsInput {
   requestorName: string;
   titleShortDescription: string;
   vendorName: string;
   vatId: string;
   commodityGroupId: number;
+  /** Grand total (net + shipping + tax + fees). */
   totalCost: number;
   department: string;
   orderLines: OrderLineInput[];
 }
 
-export interface UpdateRequestInput {
+export interface UpdateRequestInput extends QuoteDetailsInput {
   requestorName: string;
   title: string;
   vendorName: string;
@@ -82,6 +99,30 @@ export interface UpdateRequestInput {
   totalCost: number;
   department: string;
   orderLines: OrderLineInput[];
+}
+
+export type FieldStatus = 'extracted' | 'not_in_document' | 'could_not_extract';
+
+export interface QuoteTotals {
+  netTotal: number | null;
+  shipping: number | null;
+  tax: number | null;
+  fees: number | null;
+  grandTotal: number | null;
+}
+
+export interface ExcludedPosition {
+  itemNo: string | null;
+  description: string;
+  amount: number | null;
+  reason: 'alternative' | 'heading' | 'promotional';
+}
+
+export interface ReconciliationFinding {
+  scope: 'line' | 'net_total' | 'grand_total';
+  lineIndex: number | null;
+  expected: number;
+  extracted: number;
 }
 
 export interface ExtractedVendorData {
@@ -89,16 +130,35 @@ export interface ExtractedVendorData {
   vendorName: string;
   vatId: string;
   department: string;
+  quoteNumber: string | null;
+  quoteDate: string | null;
+  validUntil: string | null;
+  currency: string;
   orderLines: OrderLineInput[];
+  totals: QuoteTotals;
+  /** Grand total. */
   totalCost: number;
   commodityGroupId: number | null;
   commodityGroupName: string | null;
+  excludedPositions: ExcludedPosition[];
+  reconciliation: ReconciliationFinding[];
+  fieldStatus: Record<string, FieldStatus>;
 }
+
+export type ExtractionErrorCode =
+  | 'not_configured'
+  | 'service_busy'
+  | 'refused'
+  | 'too_long'
+  | 'unreadable';
 
 export interface ExtractionResponse {
   success: boolean;
+  extractionId?: string | null;
   data?: ExtractedVendorData;
   error?: string;
+  errorCode?: ExtractionErrorCode | null;
+  /** Fields the requester must fill in (could not be extracted). */
   missingFields?: string[];
 }
 
@@ -260,7 +320,8 @@ export const organizations = {
     return apiFetch('/organizations/me/settings');
   },
 
-  updateSettings(settings: OrganizationSettings): Promise<OrganizationSettings> {
+  /** Updates only the keys given; the server keeps the other settings. */
+  updateSettings(settings: Partial<OrganizationSettings>): Promise<OrganizationSettings> {
     return apiFetch('/organizations/me/settings', { method: 'PATCH', body: settings });
   },
 };

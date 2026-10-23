@@ -60,7 +60,16 @@ export type ProcurementRequest = {
   approval_status: 'pending' | 'approved' | 'rejected';
   approved_by: string | null;
   approved_at: string | null;
+  /** Grand total (net + shipping + tax + fees). */
   total_cost: number | null;
+  net_total: number | null;
+  shipping_amount: number | null;
+  tax_amount: number | null;
+  fees_amount: number | null;
+  currency: string | null;
+  quote_number: string | null;
+  quote_date: string | null;
+  quote_valid_until: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -72,6 +81,8 @@ export type OrderLine = {
   unit_price: number;
   amount: number;
   unit: string;
+  discount_percent: number;
+  /** Net of discount. */
   total_price: number;
   line_order: number;
   created_at: string;

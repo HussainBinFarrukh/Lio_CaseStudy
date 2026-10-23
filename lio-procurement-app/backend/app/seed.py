@@ -51,6 +51,12 @@ ORG_ACCOUNTS: list[tuple[str, str, list[tuple[str, str, str]]]] = [
     ("BMW", "bmw", [("admin@bmw.com", "BMW Admin", "admin")]),
 ]
 
+# Names each tenant appears under on its vendor quotes (organization setting
+# ``buyer_aliases``). Acme's reference quotes are addressed to these names.
+ORG_BUYER_ALIASES: dict[str, list[str]] = {
+    "acme": ["ACME Corp", "Lio Technologies, Inc.", "askLio"],
+}
+
 
 def seed_commodity_groups(db: Session) -> int:
     """Insert commodity groups that aren't already present (keyed by id)."""
@@ -163,6 +169,22 @@ def seed_organizations_and_accounts(db: Session) -> tuple[int, int]:
     return orgs_created, users_created
 
 
+def seed_buyer_aliases(db: Session) -> int:
+    """Set default buyer aliases where the setting was never configured.
+
+    Only fills a missing key, so an admin's later edits (even clearing the list)
+    are never overwritten.
+    """
+    updated = 0
+    for slug, aliases in ORG_BUYER_ALIASES.items():
+        org = db.scalar(select(Organization).where(Organization.slug == slug))
+        if org is None or "buyer_aliases" in (org.settings or {}):
+            continue
+        org.settings = {**(org.settings or {}), "buyer_aliases": aliases}
+        updated += 1
+    return updated
+
+
 def seed(db: Session) -> dict[str, int]:
     """Seed everything. Returns counts of newly created rows per kind.
 
@@ -181,6 +203,7 @@ def seed(db: Session) -> dict[str, int]:
         "articles": seed_articles(db, dev_org_id) if dev_org_id else 0,
         "organizations": orgs_created,
         "users": users_created,
+        "buyer_aliases": seed_buyer_aliases(db),
     }
     db.commit()
     return counts

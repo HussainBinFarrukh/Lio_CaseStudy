@@ -22,6 +22,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-45}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
       CORS_ORIGINS: http://localhost:3200
     depends_on:
       db:

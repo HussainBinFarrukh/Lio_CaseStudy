@@ -64,11 +64,30 @@ npm install
 npm run dev
 ```
 
+## PDF extraction
+
+`.env.example` lists every setting (`OPENAI_API_KEY`, `OPENAI_MODEL`,
+`OPENAI_TIMEOUT_SECONDS`, `OPENAI_MAX_RETRIES`, `JWT_SECRET`). Extraction reads
+the PDF in layout order, asks the model for a fixed (Structured Outputs) schema,
+then applies deterministic rules in `backend/app/services/quote_rules.py`:
+the buyer is never the vendor, tax IDs must be a 9-digit EIN, alternatives /
+headings / upsells are excluded from the order lines, discounts are kept, the
+request total is the **grand total**, and lines are reconciled against the
+quote's totals. Failures come back as plain-language messages with an
+`errorCode`; each extraction logs one diagnostics line (no document text).
+
+The names an organization appears under on quotes ("buyer aliases") are an
+admin setting under **Organization → Settings**; Acme is seeded with
+`ACME Corp`, `Lio Technologies, Inc.` and `askLio`.
+
 ## Tests
 
 ```bash
-cd backend && python -m pytest      # API tests (in-memory SQLite)
+cd backend && python -m pytest      # API + extraction tests (in-memory SQLite, no network)
 cd frontend && npx tsc --noEmit && npm run build
+
+# Live accuracy check on the reference quotes in ../quotes (needs OPENAI_API_KEY):
+cd backend && python scripts/eval_extraction.py --runs 3
 ```
 
 ## Layout

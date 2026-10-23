@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
@@ -17,6 +18,7 @@ from app.models import (
     RequestDocument,
 )
 from app.schemas.requests import (
+    QUOTE_DETAIL_FIELDS,
     ApprovalDecision,
     RequestActivityOut,
     RequestCreate,
@@ -24,6 +26,7 @@ from app.schemas.requests import (
     RequestUpdate,
     StatusUpdate,
 )
+from app.services.pdf import is_pdf_upload
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 
@@ -39,6 +42,14 @@ _FIELD_LABELS = {
     "total_cost": "total cost",
     "department": "department",
     "order_lines": "order lines",
+    "quote_number": "quote number",
+    "quote_date": "quote date",
+    "quote_valid_until": "quote valid-until date",
+    "currency": "currency",
+    "net_total": "net total",
+    "shipping_amount": "shipping",
+    "tax_amount": "tax",
+    "fees_amount": "fees",
 }
 
 
@@ -118,10 +129,30 @@ def _order_lines_signature(lines) -> list[tuple]:
             float(line.unit_price),
             float(line.amount),
             line.unit,
+            float(line.discount_percent or 0),
             float(line.total_price),
         )
         for line in lines
     ]
+
+
+def _build_order_lines(payload: RequestCreate | RequestUpdate) -> list[OrderLine]:
+    return [
+        OrderLine(
+            position_description=line.position_description,
+            unit_price=line.unit_price,
+            amount=line.amount,
+            unit=line.unit,
+            discount_percent=line.discount_percent,
+            total_price=line.total_price,
+            line_order=index + 1,
+        )
+        for index, line in enumerate(payload.order_lines)
+    ]
+
+
+def _comparable(value):
+    return float(value) if isinstance(value, (int, float, Decimal)) else value
 
 
 def _changed_fields(request: ProcurementRequest, payload: RequestUpdate) -> list[str]:
@@ -147,6 +178,12 @@ def _changed_fields(request: ProcurementRequest, payload: RequestUpdate) -> list
     new_lines = _order_lines_signature(payload.order_lines)
     if old_lines != new_lines:
         changed.append("order_lines")
+    # Quote details only count when the client sent them (see update_request).
+    for field in QUOTE_DETAIL_FIELDS:
+        if field in payload.model_fields_set and _comparable(
+            getattr(request, field)
+        ) != _comparable(getattr(payload, field)):
+            changed.append(field)
     return changed
 
 
@@ -198,18 +235,9 @@ def create_request(
         organization_id=membership.organization_id,
         created_by=membership.user_id,
         status="open",
+        **{field: getattr(payload, field) for field in QUOTE_DETAIL_FIELDS},
     )
-    request.order_lines = [
-        OrderLine(
-            position_description=line.position_description,
-            unit_price=line.unit_price,
-            amount=line.amount,
-            unit=line.unit,
-            total_price=line.total_price,
-            line_order=index + 1,
-        )
-        for index, line in enumerate(payload.order_lines)
-    ]
+    request.order_lines = _build_order_lines(payload)
     db.add(request)
     db.flush()
     _log_activity(db, request.id, membership.user_id, "created", "Request created")
@@ -239,19 +267,14 @@ def update_request(
     request.commodity_group_id = payload.commodity_group_id
     request.total_cost = payload.total_cost
     request.department = payload.department
+    # Quote details are optional on update: clients that don't send them (e.g.
+    # the detail-page edit form) must not wipe what was captured at creation.
+    for field in QUOTE_DETAIL_FIELDS:
+        if field in payload.model_fields_set:
+            setattr(request, field, getattr(payload, field))
 
     # Replace order lines (same semantics as the original delete-and-insert).
-    request.order_lines = [
-        OrderLine(
-            position_description=line.position_description,
-            unit_price=line.unit_price,
-            amount=line.amount,
-            unit=line.unit,
-            total_price=line.total_price,
-            line_order=index + 1,
-        )
-        for index, line in enumerate(payload.order_lines)
-    ]
+    request.order_lines = _build_order_lines(payload)
 
     if changed:
         labels = [_FIELD_LABELS.get(f, f) for f in changed]
@@ -351,15 +374,15 @@ async def upload_document(
     """Attach (or replace) the original PDF for a request."""
     request = _get_org_request(db, request_id, membership.organization_id)
 
-    if file.content_type not in ("application/pdf", "application/x-pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a PDF file"
-        )
     content = await file.read()
     if len(content) > MAX_PDF_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="PDF exceeds the 10MB limit",
+        )
+    if not is_pdf_upload(file.filename, file.content_type, content):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a PDF file"
         )
 
     document = db.scalar(

@@ -1,0 +1,110 @@
+{
+  "_comment": "Recorded/representative LlmQuote outputs for the five reference quotes, including model mistakes the deterministic rules must correct (alternative labelled as item, spaced EIN, (Alt.) row).",
+  "QT-4120-Cust-14918.pdf": {
+    "title": "Moss Art Panel and Logo",
+    "vendor_name": "Greenmantle Moss Studio, LLC",
+    "vendor_tax_id": "85-3252405",
+    "quote_number": "4120",
+    "quote_date": "2023-11-28",
+    "valid_until": "01/27/24",
+    "currency": "USD",
+    "positions": [
+      {"item_no": "1", "kind": "heading", "description": "Moss Art Panel, Mixed Moss 63 x 31.5 in", "quantity": null, "unit": null, "unit_price": null, "discount_percent": null, "line_total": null, "price_note": null},
+      {"item_no": "2", "kind": "item", "description": "Moss Art Panel, Mixed Moss 63 x 31.5 in", "quantity": 1, "unit": "pieces", "unit_price": 894.08, "discount_percent": 20, "line_total": 715.26, "price_note": null},
+      {"item_no": "3", "kind": "item", "description": "Logo integration \"asklio\" horizontal", "quantity": 1, "unit": "pieces", "unit_price": 622.0, "discount_percent": null, "line_total": 622.0, "price_note": null},
+      {"item_no": "4", "kind": "heading", "description": "Alternative: vertical logo", "quantity": null, "unit": null, "unit_price": null, "discount_percent": null, "line_total": null, "price_note": null},
+      {"item_no": "5", "kind": "item", "description": "(Alt.) Logo integration \"asklio\" vertical", "quantity": 1, "unit": "pieces", "unit_price": 430.0, "discount_percent": null, "line_total": 430.0, "price_note": null}
+    ],
+    "net_total": 1337.26,
+    "shipping": 215.0,
+    "tax": 133.88,
+    "fees": null,
+    "grand_total": 1686.14,
+    "commodity_group_id": 15,
+    "absent_fields": ["fees"]
+  },
+  "QT-OF2312380-Cust-57692.pdf": {
+    "title": "Custom Moss Wall and Logo",
+    "vendor_name": "Bloomcraft Interiors, Inc.",
+    "vendor_tax_id": null,
+    "quote_number": "OF2312380",
+    "quote_date": "2023-11-26",
+    "valid_until": "2023-12-10",
+    "currency": "USD",
+    "positions": [
+      {"item_no": "1", "kind": "item", "description": "verdeform CUSTOM module", "quantity": 13.78, "unit": "sq ft", "unit_price": 52.0, "discount_percent": null, "line_total": 716.56, "price_note": null},
+      {"item_no": "2", "kind": "item", "description": "verdeform CUSTOM edge greening", "quantity": 15.75, "unit": "lin ft", "unit_price": 7.65, "discount_percent": null, "line_total": 120.49, "price_note": null},
+      {"item_no": "3", "kind": "item", "description": "Logo acrylic white \"askLio\"", "quantity": 1, "unit": "pieces", "unit_price": 350.0, "discount_percent": null, "line_total": 350.0, "price_note": null},
+      {"item_no": null, "kind": "promotional", "description": "Have you met our Moss Duo? ... just MSRP $79", "quantity": null, "unit": null, "unit_price": 79.0, "discount_percent": null, "line_total": null, "price_note": null}
+    ],
+    "net_total": 1187.05,
+    "shipping": 113.85,
+    "tax": 112.2,
+    "fees": null,
+    "grand_total": 1413.1,
+    "commodity_group_id": 15,
+    "absent_fields": ["vendor_tax_id", "fees"]
+  },
+  "QuoteA0492_23.Pdf": {
+    "title": "Moss Art Panel",
+    "vendor_name": "Hollis Greenscapes",
+    "vendor_tax_id": "94 1985704",
+    "quote_number": "A0492/23",
+    "quote_date": "2023-12-12",
+    "valid_until": null,
+    "currency": "USD",
+    "positions": [
+      {"item_no": "1", "kind": "heading", "description": "Moss art panel", "quantity": null, "unit": null, "unit_price": null, "discount_percent": null, "line_total": null, "price_note": null},
+      {"item_no": "1.1", "kind": "item", "description": "Moss panel \"70:30\" with \"askLio\" lettering", "quantity": 1, "unit": "pieces", "unit_price": 1560.0, "discount_percent": null, "line_total": 1560.0, "price_note": null},
+      {"item_no": "1.1a", "kind": "item", "description": "As previous item, but ball moss only.", "quantity": 1, "unit": "pieces", "unit_price": 2090.0, "discount_percent": null, "line_total": null, "price_note": "U.P."},
+      {"item_no": "1.1b", "kind": "alternative", "description": "As item 1.1, but forest moss throughout", "quantity": 1, "unit": "pieces", "unit_price": 1830.0, "discount_percent": null, "line_total": null, "price_note": "U.P."},
+      {"item_no": "1.2", "kind": "item", "description": "Transport, packing and shipping", "quantity": 1, "unit": "pieces", "unit_price": 320.0, "discount_percent": null, "line_total": 320.0, "price_note": null}
+    ],
+    "net_total": 1880.0,
+    "shipping": null,
+    "tax": 162.15,
+    "fees": null,
+    "grand_total": 2042.15,
+    "commodity_group_id": 15,
+    "absent_fields": ["valid_until", "shipping", "fees"]
+  },
+  "Quote_1__Lio_Technologies_Inc__1x_MBA___2214703918.pdf": {
+    "title": "MacBook Air Purchase",
+    "vendor_name": "Apple Inc.",
+    "vendor_tax_id": "94-2404110",
+    "quote_number": "2214703918 - 18000012048816",
+    "quote_date": "2024-02-20",
+    "valid_until": "2024-03-20",
+    "currency": "USD",
+    "positions": [
+      {"item_no": null, "kind": "item", "description": "13\" MacBook Air: Apple M2 Chip - Space Gray (configuration: 8-core CPU, 16GB, 512GB SSD)", "quantity": 1, "unit": "pieces", "unit_price": 1409.06, "discount_percent": null, "line_total": 1409.06, "price_note": null}
+    ],
+    "net_total": 1409.06,
+    "shipping": null,
+    "tax": 121.53,
+    "fees": 4.0,
+    "grand_total": 1534.59,
+    "commodity_group_id": 30,
+    "absent_fields": ["shipping"]
+  },
+  "Quote_Hartwell_Cleveland_ACME_Grinding_Machine.pdf": {
+    "title": "Grinding Machine Purchase",
+    "vendor_name": "Hartwell Industrial Tools, Inc.",
+    "vendor_tax_id": null,
+    "quote_number": "Q-HW-2026-041",
+    "quote_date": "2026-05-08",
+    "valid_until": "2026-06-07",
+    "currency": "USD",
+    "positions": [
+      {"item_no": "1", "kind": "item", "description": "Grinding machine HW-GS 450", "quantity": 1, "unit": "pieces", "unit_price": 15000.0, "discount_percent": null, "line_total": 15000.0, "price_note": null},
+      {"item_no": "2", "kind": "item", "description": "Delivery and installation", "quantity": 1, "unit": "lump sum", "unit_price": 2000.0, "discount_percent": null, "line_total": 2000.0, "price_note": null}
+    ],
+    "net_total": 17000.0,
+    "shipping": null,
+    "tax": 1402.5,
+    "fees": null,
+    "grand_total": 18402.5,
+    "commodity_group_id": 20,
+    "absent_fields": ["vendor_tax_id", "shipping", "fees"]
+  }
+}

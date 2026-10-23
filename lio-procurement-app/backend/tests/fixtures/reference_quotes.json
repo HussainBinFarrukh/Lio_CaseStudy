@@ -1,0 +1,61 @@
+{
+  "_comment": "Ground truth for the five reference quotes in /quotes (spec 001, Appendices A & B). Used by offline tests and scripts/eval_extraction.py.",
+  "buyer_names": ["Acme Corp", "ACME Corp", "Lio Technologies, Inc.", "askLio"],
+  "quotes": {
+    "QT-4120-Cust-14918.pdf": {
+      "vendor": ["Greenmantle Moss Studio, LLC"],
+      "vat_id": "85-3252405",
+      "line_totals": [715.26, 622.0],
+      "alternatives": ["5"],
+      "net_total": 1337.26,
+      "grand_total": 1686.14,
+      "quote_number": "4120",
+      "quote_date": "2023-11-28",
+      "valid_until": "2024-01-27"
+    },
+    "QT-OF2312380-Cust-57692.pdf": {
+      "vendor": ["Bloomcraft Interiors, Inc.", "verdeform"],
+      "vat_id": "",
+      "line_totals": [716.56, 120.49, 350.0],
+      "alternatives": [],
+      "net_total": 1187.05,
+      "grand_total": 1413.1,
+      "quote_number": "OF2312380",
+      "quote_date": "2023-11-26",
+      "valid_until": "2023-12-10"
+    },
+    "QuoteA0492_23.Pdf": {
+      "vendor": ["Hollis Greenscapes"],
+      "vat_id": "94-1985704",
+      "line_totals": [1560.0, 320.0],
+      "alternatives": ["1.1a", "1.1b"],
+      "net_total": 1880.0,
+      "grand_total": 2042.15,
+      "quote_number": "A0492/23",
+      "quote_date": "2023-12-12",
+      "valid_until": null
+    },
+    "Quote_1__Lio_Technologies_Inc__1x_MBA___2214703918.pdf": {
+      "vendor": ["Apple", "Apple Inc.", "Apple Business Team"],
+      "vat_id": "94-2404110",
+      "line_totals": [1409.06],
+      "alternatives": [],
+      "net_total": 1409.06,
+      "grand_total": 1534.59,
+      "quote_number": "2214703918 - 18000012048816",
+      "quote_date": "2024-02-20",
+      "valid_until": "2024-03-20"
+    },
+    "Quote_Hartwell_Cleveland_ACME_Grinding_Machine.pdf": {
+      "vendor": ["Hartwell Industrial Tools, Inc."],
+      "vat_id": "",
+      "line_totals": [15000.0, 2000.0],
+      "alternatives": [],
+      "net_total": 17000.0,
+      "grand_total": 18402.5,
+      "quote_number": "Q-HW-2026-041",
+      "quote_date": "2026-05-08",
+      "valid_until": "2026-06-07"
+    }
+  }
+}

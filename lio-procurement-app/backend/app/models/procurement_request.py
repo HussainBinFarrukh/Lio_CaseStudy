@@ -1,9 +1,10 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -60,8 +61,18 @@ class ProcurementRequest(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
-    # Financial
+    # Financial — total_cost is the grand total (net + shipping + tax + fees).
     total_cost: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    net_total: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    shipping_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    tax_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    fees_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+
+    # Vendor quote reference (migration 0007)
+    quote_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quote_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    quote_valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     # Multi-tenancy (added in migration 003, nullable for backward compatibility)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -94,6 +105,10 @@ class OrderLine(Base, CreatedAtMixin):
     # NUMERIC(12, 4) since migration 004 — supports decimal quantities (e.g. 1.28 m).
     amount: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
     unit: Mapped[str] = mapped_column(Text, nullable=False)
+    discount_percent: Mapped[float] = mapped_column(
+        Numeric(5, 2), nullable=False, default=0, server_default="0"
+    )
+    # Net of discount.
     total_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     line_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

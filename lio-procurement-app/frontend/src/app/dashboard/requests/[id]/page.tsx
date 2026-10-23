@@ -149,6 +149,7 @@ export default function RequestDetailPage() {
           unitPrice: l.unit_price,
           amount: l.amount,
           unit: l.unit,
+          discountPercent: l.discount_percent,
           totalPrice: l.total_price,
         })),
       });
@@ -259,6 +260,22 @@ export default function RequestDetailPage() {
             </dl>
           </div>
 
+          {hasQuoteDetails(request) && (
+            <div className="lio-card p-6">
+              <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Vendor Quote</h2>
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
+                <Field label="Quote Number" value={request.quote_number || '—'} />
+                <Field label="Currency" value={request.currency || '—'} />
+                <Field label="Quote Date" value={formatOptionalDate(request.quote_date)} />
+                <Field label="Valid Until" value={formatOptionalDate(request.quote_valid_until)} />
+                <Field label="Net Total" value={optionalUsd(request.net_total)} />
+                <Field label="Shipping" value={optionalUsd(request.shipping_amount)} />
+                <Field label="Tax" value={optionalUsd(request.tax_amount)} />
+                <Field label="Fees" value={optionalUsd(request.fees_amount)} />
+              </dl>
+            </div>
+          )}
+
           <div className="lio-card p-6">
             <h2 className="text-lg font-semibold tracking-tight text-ink mb-4">Order Lines</h2>
             <div className="space-y-2">
@@ -268,6 +285,7 @@ export default function RequestDetailPage() {
                     <p className="text-sm font-medium text-ink">{i + 1}. {line.position_description}</p>
                     <p className="text-sm text-ink/55 mt-0.5">
                       {line.amount} {line.unit} × {usd(line.unit_price)}
+                      {line.discount_percent > 0 && ` − ${line.discount_percent}%`}
                     </p>
                   </div>
                   <p className="text-sm font-semibold text-ink">{usd(line.total_price)}</p>
@@ -370,6 +388,14 @@ export default function RequestDetailPage() {
     </div>
   );
 }
+
+const optionalUsd = (n: number | null) => (n === null ? '—' : usd(n));
+// Quote dates are calendar dates (YYYY-MM-DD); format without a timezone shift.
+const formatOptionalDate = (d: string | null) =>
+  d ? new Date(`${d}T00:00:00`).toLocaleDateString('en-US') : '—';
+const hasQuoteDetails = (r: ProcurementRequestWithDetails) =>
+  [r.quote_number, r.quote_date, r.quote_valid_until, r.net_total, r.shipping_amount,
+    r.tax_amount, r.fees_amount].some((v) => v !== null && v !== undefined);
 
 function Field({ label, value }: { label: string; value: string }) {
   return (

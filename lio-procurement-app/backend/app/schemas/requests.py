@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 RequestStatus = Literal["open", "in_progress", "closed"]
 ApprovalStatus = Literal["pending", "approved", "rejected"]
@@ -17,10 +17,39 @@ class OrderLineIn(BaseModel):
     unit_price: float = Field(alias="unitPrice")
     amount: float
     unit: str
+    discount_percent: float = Field(default=0, ge=0, lt=100, alias="discountPercent")
+    # Net of discount.
     total_price: float = Field(alias="totalPrice")
 
 
-class RequestCreate(BaseModel):
+class QuoteDetailsIn(BaseModel):
+    """Optional vendor-quote details captured at extraction (all nullable)."""
+
+    quote_number: str | None = Field(default=None, alias="quoteNumber")
+    quote_date: date | None = Field(default=None, alias="quoteDate")
+    quote_valid_until: date | None = Field(default=None, alias="validUntil")
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    net_total: float | None = Field(default=None, ge=0, alias="netTotal")
+    shipping_amount: float | None = Field(default=None, ge=0, alias="shippingAmount")
+    tax_amount: float | None = Field(default=None, ge=0, alias="taxAmount")
+    fees_amount: float | None = Field(default=None, ge=0, alias="feesAmount")
+
+    @field_validator("currency")
+    @classmethod
+    def upper_currency(cls, value: str | None) -> str | None:
+        return value.upper() if value else None
+
+    @field_validator("quote_number")
+    @classmethod
+    def blank_quote_number(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
+
+
+# Request columns set from QuoteDetailsIn (same names on both sides).
+QUOTE_DETAIL_FIELDS = tuple(QuoteDetailsIn.model_fields)
+
+
+class RequestCreate(QuoteDetailsIn):
     requestor_name: str = Field(alias="requestorName")
     title: str = Field(alias="titleShortDescription")
     vendor_name: str = Field(alias="vendorName")
@@ -31,7 +60,7 @@ class RequestCreate(BaseModel):
     order_lines: list[OrderLineIn] = Field(alias="orderLines", min_length=1)
 
 
-class RequestUpdate(BaseModel):
+class RequestUpdate(QuoteDetailsIn):
     requestor_name: str = Field(alias="requestorName")
     title: str
     vendor_name: str = Field(alias="vendorName")
@@ -71,6 +100,7 @@ class OrderLineOut(BaseModel):
     unit_price: float
     amount: float
     unit: str
+    discount_percent: float
     total_price: float
     line_order: int
     created_at: datetime
@@ -106,6 +136,14 @@ class RequestOut(BaseModel):
     approved_by: uuid.UUID | None
     approved_at: datetime | None
     total_cost: float | None
+    net_total: float | None
+    shipping_amount: float | None
+    tax_amount: float | None
+    fees_amount: float | None
+    currency: str | None
+    quote_number: str | None
+    quote_date: date | None
+    quote_valid_until: date | None
     created_at: datetime
     updated_at: datetime
     order_lines: list[OrderLineOut]

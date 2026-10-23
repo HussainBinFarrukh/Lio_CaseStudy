@@ -400,6 +400,22 @@ def test_pdf_parse():
     assert r.status_code == 200, r.text
     assert "text" in r.json()  # blank page -> empty text, but parses fine
 
+    # Upper-case extension and a generic browser-reported type are still a PDF.
+    r = client.post(
+        "/pdf/parse",
+        files={"file": ("QuoteA0492_23.Pdf", buf.getvalue(), "application/octet-stream")},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+
+    # A file that claims to be a PDF but isn't one is rejected.
+    r = client.post(
+        "/pdf/parse",
+        files={"file": ("fake.pdf", b"not a pdf", "application/pdf")},
+        headers=_auth(token),
+    )
+    assert r.status_code == 400
+
     # non-PDF rejected
     r = client.post(
         "/pdf/parse",
@@ -479,8 +495,12 @@ def test_activity_log_and_document():
     client.delete(f"/requests/{rid}", headers=_auth(admin))
 
 
-def test_extraction_without_api_key():
-    r = client.post("/auth/signup", json={"email": "ex@example.com", "password": "secret123"})
+def test_extraction_without_api_key(monkeypatch):
+    # Changed for spec 001: extraction needs the caller's organization (to know
+    # who the buyer is), and failures carry a plain-language message plus an
+    # errorCode instead of technical text such as the env var name (FR-005).
+    monkeypatch.setattr("app.services.extraction.settings.openai_api_key", None)
+    r = client.post("/auth/signin", json={"email": "requester@acme.com", "password": "demo1234"})
     token = r.json()["access_token"]
 
     r = client.post("/extraction", json={"text": "Quote No. 123"}, headers=_auth(token))
@@ -489,11 +509,48 @@ def test_extraction_without_api_key():
     # Without OPENAI_API_KEY configured the endpoint reports a clean failure
     # envelope rather than an HTTP error.
     assert body["success"] is False
-    assert "OPENAI_API_KEY" in body["error"]
+    assert body["errorCode"] == "not_configured"
+    assert "OPENAI" not in body["error"]
 
     # empty text
     r = client.post("/extraction", json={"text": "  "}, headers=_auth(token))
     assert r.json()["success"] is False
+    assert r.json()["errorCode"] == "unreadable"
+
+    # A user without an organization cannot extract.
+    r = client.post("/auth/signup", json={"email": "ex@example.com", "password": "secret123"})
+    r = client.post(
+        "/extraction", json={"text": "Quote"}, headers=_auth(r.json()["access_token"])
+    )
+    assert r.status_code == 403
+
+
+def test_extraction_uses_buyer_names_and_profile_department(monkeypatch):
+    from app.models import Profile, User
+    from app.routers import extraction as extraction_router
+    from app.schemas.extraction import ExtractionResponse
+
+    captured = {}
+
+    def fake_extract(text, db, **kwargs):
+        captured.update(kwargs)
+        return ExtractionResponse(success=False, error_code="unreadable", error="x")
+
+    monkeypatch.setattr(extraction_router, "extract_vendor_data", fake_extract)
+    with TestingSession() as db:
+        user = db.scalar(select(User).where(User.email == "buyer@acme.com"))
+        db.get(Profile, user.id).department = "Facilities"
+        db.commit()
+
+    token = client.post(
+        "/auth/signin", json={"email": "buyer@acme.com", "password": "demo1234"}
+    ).json()["access_token"]
+    assert client.post("/extraction", json={"text": "Q"}, headers=_auth(token)).status_code == 200
+    # Org name + seeded aliases; department is the requester's own, not the quote's.
+    assert captured["buyer_names"] == [
+        "Acme Corp", "ACME Corp", "Lio Technologies, Inc.", "askLio"
+    ]
+    assert captured["department"] == "Facilities"
 
 
 def test_commodity_groups_expanded():
@@ -727,10 +784,11 @@ def test_org_settings_required_fields():
         headers=_auth(token),
     )
 
-    # Default settings: nothing extra required.
+    # Default settings: nothing extra required. (Changed for spec 001: settings
+    # now also include the empty buyer_aliases list.)
     r = client.get("/organizations/me/settings", headers=_auth(token))
     assert r.status_code == 200
-    assert r.json() == {"required_fields": []}
+    assert r.json() == {"required_fields": [], "buyer_aliases": []}
 
     base_payload = {
         "requestorName": "S", "titleShortDescription": "T", "vendorName": "V",
@@ -809,6 +867,106 @@ def test_org_settings_admin_only():
         headers=_auth(member),
     )
     assert r.status_code == 403
+
+
+def test_org_settings_merge_and_buyer_aliases():
+    token = client.post(
+        "/auth/signup", json={"email": "alias-admin@example.com", "password": "secret123"}
+    ).json()["access_token"]
+    client.post(
+        "/organizations", json={"name": "Alias Co", "slug": "alias-co"}, headers=_auth(token)
+    )
+
+    r = client.patch(
+        "/organizations/me/settings",
+        json={"buyer_aliases": [" Alias Company, Inc. ", "alias company, inc.", "AliasCo"]},
+        headers=_auth(token),
+    )
+    assert r.status_code == 200, r.text
+    # Trimmed and de-duplicated (case-insensitive).
+    assert r.json()["buyer_aliases"] == ["Alias Company, Inc.", "AliasCo"]
+
+    # Saving another setting keeps the aliases (FR-010), and vice versa.
+    r = client.patch(
+        "/organizations/me/settings", json={"required_fields": ["vat_id"]}, headers=_auth(token)
+    )
+    assert r.json() == {
+        "required_fields": ["vat_id"], "buyer_aliases": ["Alias Company, Inc.", "AliasCo"]
+    }
+    r = client.patch(
+        "/organizations/me/settings", json={"buyer_aliases": []}, headers=_auth(token)
+    )
+    assert r.json() == {"required_fields": ["vat_id"], "buyer_aliases": []}
+
+    for bad in ([""], ["x" * 121], [f"name {i}" for i in range(21)]):
+        r = client.patch(
+            "/organizations/me/settings", json={"buyer_aliases": bad}, headers=_auth(token)
+        )
+        assert r.status_code == 422, bad
+
+    # Seeded tenant: Acme starts with its aliases; buyers can read but not edit.
+    buyer = client.post(
+        "/auth/signin", json={"email": "buyer@acme.com", "password": "demo1234"}
+    ).json()["access_token"]
+    r = client.get("/organizations/me/settings", headers=_auth(buyer))
+    assert "Lio Technologies, Inc." in r.json()["buyer_aliases"]
+    r = client.patch(
+        "/organizations/me/settings", json={"buyer_aliases": []}, headers=_auth(buyer)
+    )
+    assert r.status_code == 403
+
+
+def test_request_keeps_quote_details_and_discounts():
+    token = client.post(
+        "/auth/signin", json={"email": "requester@acme.com", "password": "demo1234"}
+    ).json()["access_token"]
+    line = {
+        "positionDescription": "Moss Art Panel", "unitPrice": 894.08, "amount": 1,
+        "unit": "pieces", "discountPercent": 20, "totalPrice": 715.26,
+    }
+    payload = {
+        "requestorName": "R", "titleShortDescription": "Moss", "vendorName": "Greenmantle",
+        "vatId": "85-3252405", "commodityGroupId": 15, "totalCost": 1686.14,
+        "department": "", "orderLines": [line],
+        "quoteNumber": "4120", "quoteDate": "2023-11-28", "validUntil": "2024-01-27",
+        "currency": "usd", "netTotal": 1337.26, "shippingAmount": 215,
+        "taxAmount": 133.88, "feesAmount": None,
+    }
+    r = client.post("/requests", json=payload, headers=_auth(token))
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["quote_number"] == "4120"
+    assert created["quote_date"] == "2023-11-28"
+    assert created["quote_valid_until"] == "2024-01-27"
+    assert created["currency"] == "USD"
+    assert (created["net_total"], created["shipping_amount"], created["tax_amount"]) == (
+        1337.26, 215, 133.88
+    )
+    assert created["order_lines"][0]["discount_percent"] == 20
+
+    # The detail-page edit form doesn't send quote details: they must survive.
+    edit = {
+        "requestorName": "R", "title": "Moss panel", "vendorName": "Greenmantle",
+        "vatId": "85-3252405", "commodityGroupId": 15, "totalCost": 1686.14,
+        "department": "", "orderLines": [line],
+    }
+    r = client.put(f"/requests/{created['id']}", json=edit, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["quote_number"] == "4120"
+    assert r.json()["order_lines"][0]["discount_percent"] == 20
+
+    # Sent explicitly, they change and the edit is logged.
+    r = client.put(
+        f"/requests/{created['id']}", json=dict(edit, quoteNumber="4120-B"), headers=_auth(token)
+    )
+    assert r.json()["quote_number"] == "4120-B"
+    activity = client.get(f"/requests/{created['id']}/activity", headers=_auth(token)).json()
+    # (SQLite timestamps share a second here, so don't rely on ordering.)
+    assert any(a["summary"] == "Updated quote number" for a in activity)
+
+    # Discounts are validated.
+    bad = dict(payload, orderLines=[dict(line, discountPercent=150)])
+    assert client.post("/requests", json=bad, headers=_auth(token)).status_code == 422
 
 
 if __name__ == "__main__":
